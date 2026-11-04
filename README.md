@@ -18,12 +18,12 @@ No dependencies beyond Node.js 18 or newer.
 npm start
 ```
 
-Then open http://127.0.0.1:3101.
+Then open http://127.0.0.1:3101. On startup the server prints every address it can be reached on.
 
-| Variable | Default     | Purpose                    |
-|----------|-------------|----------------------------|
-| `PORT`   | `3101`      | Port to listen on          |
-| `HOST`   | `127.0.0.1` | Interface to bind to       |
+| Variable | Default | Purpose                                                                 |
+|----------|---------|-------------------------------------------------------------------------|
+| `PORT`   | `3101`  | Port to listen on                                                       |
+| `HOST`   | `::`    | Interface to bind to. The default is all interfaces, IPv4 and IPv6 (falls back to `0.0.0.0` without IPv6). Set `127.0.0.1` to allow this machine only. |
 
 ## Data
 
@@ -43,6 +43,6 @@ Several people can use the board at once, and every change appears for everyone 
 
 The app has **no authentication of its own**. Anyone who can reach the port can read and edit everything.
 
-- Keep the default `HOST=127.0.0.1` so the app is only reachable from this machine.
-- Run `cloudflared` on the same host and point the tunnel's ingress at `http://127.0.0.1:3101`.
+- Point the tunnel's service at `http://<server-LAN-IP>:3101`, using plain `http` (Cloudflare provides HTTPS to visitors). If `cloudflared` runs on the same machine, use `http://127.0.0.1:3101`.
 - Put a **Cloudflare Access** application (with an allow policy for the people who should get in) in front of the tunnel's hostname. Without Access, the tunnel makes the board public.
+- Access only protects the public hostname. Because the app listens on all interfaces by default, anyone who can reach the server's port on your network can open the board directly. Ideally allow port 3101 only from the `cloudflared` machine, or set `HOST=127.0.0.1` when `cloudflared` runs on the same machine.

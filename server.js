@@ -5,11 +5,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const Sync = require('./public/sync.js');
 
 const PORT = process.env.PORT || 3101;
-// Loopback only by default: the app has no auth and is meant to be exposed through a Cloudflare Tunnel on this host.
-const HOST = process.env.HOST || '127.0.0.1';
+// All interfaces by default, so a Cloudflare Tunnel on another machine can reach it. The app has no auth of its own:
+// keep the port closed to anything but the tunnel. '::' accepts IPv4 and IPv6; falls back to 0.0.0.0 without IPv6.
+const HOST = process.env.HOST || '::';
 const DATA = path.join(__dirname, 'data.json');
 const PUBLIC = path.join(__dirname, 'public');
 const MAX_BODY = 1024 * 1024;
@@ -91,7 +93,7 @@ function readBody(req, cb) {
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   if (url === '/api/state' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -128,4 +130,18 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(buf);
   });
-}).listen(PORT, HOST, () => console.log(`Project manager on http://${HOST}:${PORT}`));
+});
+
+function urls() {
+  const any = HOST === '::' || HOST === '0.0.0.0';
+  if (!any) return [HOST.includes(':') ? `[${HOST}]` : HOST];
+  const lan = Object.values(os.networkInterfaces()).flat().filter(a => a && !a.internal && a.family === 'IPv4').map(a => a.address);
+  return ['127.0.0.1', ...lan];
+}
+server.on('listening', () => console.log(`Project manager listening on ${server.address().address} port ${PORT}:\n` +
+  urls().map(h => `  http://${h}:${PORT}`).join('\n')));
+server.on('error', err => {
+  if (HOST === '::' && !process.env.HOST && ['EAFNOSUPPORT', 'EADDRNOTAVAIL'].includes(err.code)) return server.listen(PORT, '0.0.0.0');
+  throw err;
+});
+server.listen(PORT, HOST);
