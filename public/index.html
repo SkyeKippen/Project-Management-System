@@ -19,15 +19,28 @@
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   button.link { border:0; background:none; color:var(--muted); padding:2px 6px; }
   input, select, textarea { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 8px; }
-  #board { flex:1; display:flex; gap:12px; padding:16px; overflow-x:auto; align-items:flex-start; }
-  .col { background:var(--panel); border-radius:6px; width:280px; flex:none; max-height:100%; display:flex; flex-direction:column; }
-  .col.over { outline:2px dashed var(--accent); }
-  .col-head { display:flex; align-items:center; gap:4px; padding:8px 10px; }
-  .col-head input { flex:1; font-weight:600; background:transparent; border-color:transparent; }
-  .col-head input:focus { background:var(--card); border-color:var(--line); }
+  /* major phase tabs */
+  #tabs { display:flex; gap:4px; padding:8px 16px 0; border-bottom:1px solid var(--line); overflow-x:auto; overflow-y:hidden; flex:none; }
+  .tab { display:flex; align-items:center; gap:2px; padding:4px 8px; border:1px solid transparent; border-bottom:0; border-radius:6px 6px 0 0; margin-bottom:-1px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .tab:hover { color:var(--text); }
+  .tab.active { background:var(--panel); border-color:var(--line); color:var(--text); cursor:default; }
+  .tab.over { outline:2px dashed var(--accent); }
+  .tab span.name { padding:2px 4px; font-weight:500; }
+  .tab input { font-weight:600; background:transparent; border-color:transparent; padding:2px 4px; }
+  .tab input:focus { background:var(--card); border-color:var(--line); }
+  .addtab { align-self:center; margin-left:4px; }
+  /* stages: vertical rows, cards flow left to right */
+  #board { flex:1; display:flex; flex-direction:column; gap:10px; padding:16px; overflow-y:auto; }
+  .stage { display:flex; background:var(--panel); border-radius:6px; flex:none; }
+  .stage.over { outline:2px dashed var(--accent); }
+  .stage-head { width:190px; flex:none; display:flex; flex-direction:column; gap:2px; padding:8px; border-right:1px solid var(--line); }
+  .stage-head input { font-weight:600; background:transparent; border-color:transparent; width:100%; }
+  .stage-head input:focus { background:var(--card); border-color:var(--line); }
+  .tools { display:flex; align-items:center; padding-left:8px; }
+  .tools .count { margin-right:auto; }
   .count { color:var(--muted); font-size:12px; }
-  .cards { padding:0 8px; overflow-y:auto; min-height:8px; display:flex; flex-direction:column; gap:8px; }
-  .card { background:var(--card); border-radius:4px; padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; }
+  .cards { flex:1; display:flex; flex-wrap:wrap; align-content:flex-start; gap:8px; padding:8px; min-height:64px; }
+  .card { width:210px; flex:none; background:var(--card); border-radius:4px; padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; }
   .card.dragging { opacity:.4; }
   .card .title { font-weight:500; }
   .meta { display:flex; gap:6px; margin-top:6px; align-items:center; color:var(--muted); font-size:12px; }
@@ -36,8 +49,8 @@
   .prio.low { color:var(--ok); border-color:var(--ok); }
   .bar { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--ok); }
-  .add { margin:8px; text-align:left; background:transparent; border-color:transparent; color:var(--muted); }
-  .newcol { width:200px; flex:none; }
+  .add { text-align:left; background:transparent; border-color:transparent; color:var(--muted); }
+  .newstage { align-self:flex-start; flex:none; }
   /* modal */
   #modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding-top:6vh; }
   #modal.open { display:flex; }
@@ -60,11 +73,13 @@
   <button id="renameProject">Rename</button>
   <button id="delProject" class="link">Delete project</button>
 </header>
+<nav id="tabs"></nav>
 <div id="board"></div>
 
 <div id="modal"><div class="dialog" id="dialog"></div></div>
 
 <script>
+// Data shape: project { majorPhases: [{ id, name, stages: [{ id, name }] }], tasks: [{ id, stageId, phases: [...] , ... }] }
 const uid = () => Math.random().toString(36).slice(2, 9);
 let state = { projects: [] };
 let currentId = localStorage.getItem('currentProject');
@@ -78,6 +93,27 @@ function save() {
   }), 250);
 }
 const project = () => state.projects.find(p => p.id === currentId) || state.projects[0];
+
+// Old shape had project.phases (board columns) and task.phaseId: those become the stages of one major phase.
+function migrate(s) {
+  let changed = false;
+  for (const p of s.projects) {
+    if (p.majorPhases) continue;
+    p.majorPhases = [{ id: uid(), name: 'Phase 1', stages: p.phases || [] }];
+    for (const t of p.tasks) { t.stageId = t.phaseId; delete t.phaseId; }
+    delete p.phases;
+    changed = true;
+  }
+  return changed;
+}
+
+// selected major phase, remembered per project
+const majorKey = p => 'currentMajor:' + p.id;
+const currentMajor = () => {
+  const p = project(), id = localStorage.getItem(majorKey(p));
+  return p.majorPhases.find(m => m.id === id) || p.majorPhases[0];
+};
+const setMajor = m => localStorage.setItem(majorKey(project()), m.id);
 
 // ---------- tiny DOM helper ----------
 function h(tag, props = {}, ...kids) {
@@ -100,47 +136,78 @@ function renderHeader() {
   sel.replaceChildren(...state.projects.map(p => h('option', { value: p.id, selected: p.id === project()?.id }, p.name)));
 }
 
-// ---------- board ----------
+// ---------- tabs + board ----------
 let dragId = null;
 function render() {
   renderHeader();
-  const board = document.getElementById('board');
+  const tabs = document.getElementById('tabs'), board = document.getElementById('board');
   const p = project();
-  if (!p) { board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
+  if (!p) { tabs.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
+  const mp = currentMajor();
 
-  const cols = p.phases.map(ph => {
-    const tasks = p.tasks.filter(t => t.phaseId === ph.id);
-    const cards = h('div', { class: 'cards' }, tasks.map(cardEl));
-    const col = h('div', { class: 'col',
-      ondragover: e => { e.preventDefault(); col.classList.add('over'); },
-      ondragleave: () => col.classList.remove('over'),
-      ondrop: e => {
-        e.preventDefault();
-        const t = p.tasks.find(t => t.id === dragId);
-        if (!t) return;
-        // drop position: before the first card whose midpoint is below the cursor
-        // (skip the dragged card itself: it is removed from p.tasks below, so it can't be an anchor)
-        const after = [...cards.children].find(c => c.dataset.id !== t.id && e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
-        p.tasks.splice(p.tasks.indexOf(t), 1);
-        t.phaseId = ph.id;
-        const beforeTask = after && p.tasks.find(x => x.id === after.dataset.id);
-        p.tasks.splice(beforeTask ? p.tasks.indexOf(beforeTask) : p.tasks.length, 0, t);
-        save(); render();
-      },
+  tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
+    h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'));
+  if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
+
+  board.replaceChildren(...mp.stages.map(st => stageEl(p, mp, st)),
+    h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: 'New stage' }); save(); render(); } }, '+ Add stage'));
+}
+
+function tabEl(p, m, active) {
+  const n = p.tasks.filter(t => m.stages.some(s => s.id === t.stageId)).length;
+  const tab = h('div', { class: 'tab' + (active ? ' active' : ''),
+    onclick: () => { if (!active) { setMajor(m); render(); } },
+    // dropping a card on a tab moves it to that major phase's first stage
+    ondragover: e => { if (dragId && m.stages.length) { e.preventDefault(); tab.classList.add('over'); } },
+    ondragleave: () => tab.classList.remove('over'),
+    ondrop: e => {
+      e.preventDefault();
+      const t = p.tasks.find(x => x.id === dragId);
+      if (!t || !m.stages.length) return;
+      moveTask(p, t, m.stages[0].id, null); setMajor(m); save(); render();
+    } },
+    active
+      ? h('input', { value: m.name, size: Math.max(6, m.name.length), onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
+      : h('span', { class: 'name' }, m.name),
+    h('span', { class: 'count' }, n),
+    active ? [
+      h('button', { class: 'link', title: 'Move left', onclick: () => moveIn(p.majorPhases, m, -1) }, '‹'),
+      h('button', { class: 'link', title: 'Move right', onclick: () => moveIn(p.majorPhases, m, 1) }, '›'),
+      h('button', { class: 'link', title: 'Delete major phase', onclick: () => delMajor(m) }, '✕')] : null);
+  return tab;
+}
+
+function stageEl(p, mp, st) {
+  const tasks = p.tasks.filter(t => t.stageId === st.id);
+  const cards = h('div', { class: 'cards' }, tasks.map(cardEl));
+  const row = h('div', { class: 'stage',
+    ondragover: e => { e.preventDefault(); row.classList.add('over'); },
+    ondragleave: () => row.classList.remove('over'),
+    ondrop: e => {
+      e.preventDefault();
+      const t = p.tasks.find(t => t.id === dragId);
+      if (!t) return;
+      // drop position: before the first card that is on a later line, or on this line with its midpoint right of the cursor
+      // (skip the dragged card itself: it is removed from p.tasks in moveTask, so it can't be an anchor)
+      const after = [...cards.children].find(c => {
+        if (c.dataset.id === t.id) return false;
+        const r = c.getBoundingClientRect();
+        return e.clientY < r.top || (e.clientY < r.bottom && e.clientX < r.left + r.width / 2);
+      });
+      moveTask(p, t, st.id, after && p.tasks.find(x => x.id === after.dataset.id));
+      save(); render();
     },
-      h('div', { class: 'col-head' },
-        h('input', { value: ph.name, onchange: e => { ph.name = e.target.value.trim() || ph.name; save(); } }),
-        h('span', { class: 'count' }, tasks.length),
-        h('button', { class: 'link', title: 'Move left', onclick: () => movePhase(ph, -1) }, '‹'),
-        h('button', { class: 'link', title: 'Move right', onclick: () => movePhase(ph, 1) }, '›'),
-        h('button', { class: 'link', title: 'Delete phase', onclick: () => delPhase(ph) }, '✕')),
-      cards,
-      h('button', { class: 'add', onclick: () => addTask(ph) }, '+ Add task'));
-    return col;
-  });
-
-  board.replaceChildren(...cols,
-    h('button', { class: 'newcol', onclick: () => { p.phases.push({ id: uid(), name: 'New phase' }); save(); render(); } }, '+ Add phase'));
+  },
+    h('div', { class: 'stage-head' },
+      h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } }),
+      h('div', { class: 'tools' },
+        h('span', { class: 'count' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
+        h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
+        h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
+        h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
+      h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task')),
+    cards);
+  return row;
 }
 
 function cardEl(t) {
@@ -156,20 +223,36 @@ function cardEl(t) {
         h('span', {}, `${t.phases.filter(x => x.done).length}/${t.phases.length}`)] : null));
 }
 
-function movePhase(ph, d) {
-  const a = project().phases, i = a.indexOf(ph), j = i + d;
+function moveTask(p, t, stageId, before) {
+  p.tasks.splice(p.tasks.indexOf(t), 1);
+  t.stageId = stageId;
+  p.tasks.splice(before ? p.tasks.indexOf(before) : p.tasks.length, 0, t);
+}
+function moveIn(a, x, d) {
+  const i = a.indexOf(x), j = i + d;
   if (j < 0 || j >= a.length) return;
   [a[i], a[j]] = [a[j], a[i]]; save(); render();
 }
-function delPhase(ph) {
-  const p = project(), n = p.tasks.filter(t => t.phaseId === ph.id).length;
-  if (n && !confirm(`Delete phase "${ph.name}" and its ${n} task(s)?`)) return;
-  p.phases = p.phases.filter(x => x !== ph);
-  p.tasks = p.tasks.filter(t => t.phaseId !== ph.id);
+function addMajor() {
+  const m = { id: uid(), name: 'New phase', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
+  project().majorPhases.push(m); setMajor(m); save(); render();
+}
+function delMajor(m) {
+  const p = project(), ids = new Set(m.stages.map(s => s.id)), n = p.tasks.filter(t => ids.has(t.stageId)).length;
+  if (!confirm(`Delete major phase "${m.name}", its ${m.stages.length} stage(s) and ${n} task(s)?`)) return;
+  p.majorPhases = p.majorPhases.filter(x => x !== m);
+  p.tasks = p.tasks.filter(t => !ids.has(t.stageId));
   save(); render();
 }
-function addTask(ph) {
-  const t = { id: uid(), title: 'New task', description: '', phaseId: ph.id, priority: 'medium', phases: [] };
+function delStage(mp, st) {
+  const p = project(), n = p.tasks.filter(t => t.stageId === st.id).length;
+  if (n && !confirm(`Delete stage "${st.name}" and its ${n} task(s)?`)) return;
+  mp.stages = mp.stages.filter(x => x !== st);
+  p.tasks = p.tasks.filter(t => t.stageId !== st.id);
+  save(); render();
+}
+function addTask(st) {
+  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, priority: 'medium', phases: [] };
   project().tasks.push(t); save(); render(); openTask(t);
 }
 
@@ -199,9 +282,11 @@ function openTask(t) {
   dialog.replaceChildren(
     h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } }),
     h('div', { class: 'row' },
-      h('div', {}, h('label', {}, 'Project phase'),
-        h('select', { onchange: e => { t.phaseId = e.target.value; save(); } },
-          p.phases.map(ph => h('option', { value: ph.id, selected: ph.id === t.phaseId }, ph.name)))),
+      h('div', {}, h('label', {}, 'Stage'),
+        // the board follows the card if it moves to another major phase
+        h('select', { onchange: e => { t.stageId = e.target.value; setMajor(p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId))); save(); } },
+          p.majorPhases.map(m => h('optgroup', { label: m.name },
+            m.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name)))))),
       h('div', {}, h('label', {}, 'Priority'),
         h('select', { onchange: e => { t.priority = e.target.value; save(); } },
           ['low', 'medium', 'high'].map(v => h('option', { value: v, selected: v === t.priority }, v))))),
@@ -218,7 +303,8 @@ function openTask(t) {
 document.getElementById('projectSel').onchange = e => { currentId = e.target.value; localStorage.setItem('currentProject', currentId); render(); };
 document.getElementById('newProject').onclick = () => {
   const name = prompt('Project name?'); if (!name) return;
-  const p = { id: uid(), name, tasks: [], phases: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
+  const p = { id: uid(), name, tasks: [], majorPhases: [{ id: uid(), name: 'Phase 1',
+    stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) }] };
   state.projects.push(p); currentId = p.id; localStorage.setItem('currentProject', currentId); save(); render();
 };
 document.getElementById('renameProject').onclick = () => {
@@ -231,7 +317,7 @@ document.getElementById('delProject').onclick = () => {
   state.projects = state.projects.filter(p => p !== cur); currentId = state.projects[0]?.id; save(); render();
 };
 
-fetch('/api/state').then(r => r.json()).then(s => { state = s; render(); });
+fetch('/api/state').then(r => r.json()).then(s => { state = s; if (migrate(state)) save(); render(); });
 </script>
 </body>
 </html>

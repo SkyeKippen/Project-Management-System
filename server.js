@@ -12,15 +12,21 @@ const PUBLIC = path.join(__dirname, 'public');
 const seed = () => ({
   projects: [{
     id: 'p1', name: 'Sample Project',
-    phases: [
-      { id: 'ph1', name: 'Planning' },
-      { id: 'ph2', name: 'Build' },
-      { id: 'ph3', name: 'Test' },
-      { id: 'ph4', name: 'Release' },
+    majorPhases: [
+      { id: 'mp1', name: 'Design', stages: [
+        { id: 'st1', name: 'Planning' },
+        { id: 'st2', name: 'In review' },
+        { id: 'st3', name: 'Approved' },
+      ] },
+      { id: 'mp2', name: 'Build', stages: [
+        { id: 'st4', name: 'To do' },
+        { id: 'st5', name: 'In progress' },
+        { id: 'st6', name: 'Done' },
+      ] },
     ],
     tasks: [{
       id: 't1', title: 'Design the schema', description: 'Tables, relations, indexes.',
-      phaseId: 'ph1', priority: 'high',
+      stageId: 'st1', priority: 'high',
       phases: [
         { id: 'tp1', name: 'Draft', done: true },
         { id: 'tp2', name: 'Review', done: false },

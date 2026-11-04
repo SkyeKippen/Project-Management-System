@@ -1,6 +1,13 @@
 # Project Management System
 
-A small self-hosted phase board. Each project has phases shown as board columns (add, rename, reorder, delete), tasks shown as cards you drag between columns, and each task can have its own list of phases with a progress bar.
+A small self-hosted phase board, organised as **Project → Major Phases → Stages → Cards**:
+
+- **Major phases** are tabs across the top of the board (add, rename, reorder, delete). The selected tab is remembered per project.
+- **Stages** are rows stacked top to bottom inside a major phase (add, rename, move up/down, delete).
+- **Cards** (tasks) flow left to right within a stage and wrap onto new lines. Drag them within a stage, between stages, or onto another major phase's tab, which moves the card to that phase's first stage.
+- Each task can also have its own list of phases, with a progress bar on the card.
+
+Data saved by older versions (project phases as columns) is migrated on load: the old columns become the stages of a single major phase named "Phase 1".
 
 No dependencies beyond Node.js 18 or newer.
 
