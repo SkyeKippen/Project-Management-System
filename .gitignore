@@ -2,3 +2,4 @@ node_modules/
 data.json
 server.log
 .env
+data.json.tmp

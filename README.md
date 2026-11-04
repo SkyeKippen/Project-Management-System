@@ -27,7 +27,17 @@ Then open http://127.0.0.1:3101.
 
 ## Data
 
-All state is stored in `data.json` next to `server.js`. It is created with sample data on first run and is not tracked by git, so back it up separately. Each save rewrites the whole file, and the last save wins: two open tabs can overwrite each other's changes.
+All state is stored in `data.json` next to `server.js`. It is created with sample data on first run and is not tracked by git, so back it up separately. Data from older versions is upgraded once when the server starts.
+
+## Multiple users
+
+Several people can use the board at once, and every change appears for everyone immediately.
+
+- The server keeps the board in memory and is the single source of truth. It saves `data.json` shortly after each change (written to a temp file, then renamed, so a crash can't leave a half-written file).
+- Browsers send only what they changed (`POST /api/ops`): set a field, or insert/remove/reorder an item in a list. Edits to different cards, or to different fields of the same card, merge rather than overwrite. If two people change the *same* field, the later change wins.
+- The server pushes each new state to every open browser over Server-Sent Events (`GET /api/events`), with a keep-alive every 25 seconds so proxies such as Cloudflare Tunnel don't drop the connection.
+- Each browser folds in other people's changes without disturbing its own: a field you are typing in, a stage you are renaming, or a card you are dragging is left alone and catches up when you finish. An open card dialog refreshes its other fields, and tells you if someone else deleted the card.
+- The header shows **● Live** while connected. If the connection drops, the page reconnects by itself, and edits made in the meantime are sent once it is back.
 
 ## Hosting behind a Cloudflare Tunnel
 
