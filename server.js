@@ -31,6 +31,8 @@ const seed = () => ({
       { id: 'c1', name: 'Bugfix', color: '#e5484d' },
       { id: 'c2', name: 'Feature Addition', color: '#3e7bfa' },
       { id: 'c3', name: 'Optimization', color: '#30a46c' },
+      { id: 'c4', name: 'Planning', color: '#f76b15' },
+      { id: 'c5', name: 'Other', color: '#8b8d98' },
     ],
     tags: [{ id: 'g1', name: 'Backend', color: '#8e4ec6' }],
     majorPhases: [
@@ -73,6 +75,16 @@ function migrate(s) {
   }
   // people list, categories (existing cards become Feature Addition), tags, attachments, 4-level priority
   if (Model.normalizeState(s, uid)) changed = true;
+  // One-off additions to existing boards, recorded in s.upgrades so they run once: a default category someone
+  // later deletes on purpose isn't added back on the next restart.
+  if (!Array.isArray(s.upgrades)) s.upgrades = [];
+  if (!s.upgrades.includes('categories:planning+other')) {
+    for (const p of s.projects) for (const c of Model.DEFAULT_CATEGORIES.filter(c => ['Planning', 'Other'].includes(c.name))) {
+      if (!p.categories.some(x => x.name.toLowerCase() === c.name.toLowerCase())) p.categories.push({ id: uid(), ...c });
+    }
+    s.upgrades.push('categories:planning+other');
+    changed = true;
+  }
   return changed;
 }
 

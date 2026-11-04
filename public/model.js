@@ -9,6 +9,8 @@
     { name: 'Bugfix', color: '#e5484d' },
     { name: 'Feature Addition', color: '#3e7bfa' },
     { name: 'Optimization', color: '#30a46c' },
+    { name: 'Planning', color: '#f76b15' },
+    { name: 'Other', color: '#8b8d98' },
   ];
   const TAG_COLORS = ['#3e7bfa', '#30a46c', '#e5484d', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#6e7781'];
 
@@ -46,5 +48,5 @@
     return changed;
   }
 
-  Object.assign(exports, { PRIORITIES, SIZES, MAX_TAGS, TAG_COLORS, newCategories, defaultCategory, normalizeState });
+  Object.assign(exports, { DEFAULT_CATEGORIES, PRIORITIES, SIZES, MAX_TAGS, TAG_COLORS, newCategories, defaultCategory, normalizeState });
 })(typeof module !== 'undefined' ? module.exports : (window.Model = {}));
