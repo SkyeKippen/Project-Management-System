@@ -1,0 +1,13 @@
+{
+  "name": "project-management-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted phase board: projects with phase columns, draggable task cards, and per-task phases.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

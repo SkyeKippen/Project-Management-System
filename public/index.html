@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phase Board</title>
+<style>
+  :root { --bg:#f4f5f7; --panel:#ebecf0; --card:#fff; --text:#172b4d; --muted:#6b778c; --accent:#0c66e4; --ok:#1f845a; --line:#dfe1e6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1d2125; --panel:#161a1d; --card:#22272b; --text:#c7d1db; --muted:#8c9bab; --accent:#579dff; --ok:#4bce97; --line:#38414a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  button, select, input, textarea { font:inherit; color:inherit; }
+  button { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.link { border:0; background:none; color:var(--muted); padding:2px 6px; }
+  input, select, textarea { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 8px; }
+  #board { flex:1; display:flex; gap:12px; padding:16px; overflow-x:auto; align-items:flex-start; }
+  .col { background:var(--panel); border-radius:6px; width:280px; flex:none; max-height:100%; display:flex; flex-direction:column; }
+  .col.over { outline:2px dashed var(--accent); }
+  .col-head { display:flex; align-items:center; gap:4px; padding:8px 10px; }
+  .col-head input { flex:1; font-weight:600; background:transparent; border-color:transparent; }
+  .col-head input:focus { background:var(--card); border-color:var(--line); }
+  .count { color:var(--muted); font-size:12px; }
+  .cards { padding:0 8px; overflow-y:auto; min-height:8px; display:flex; flex-direction:column; gap:8px; }
+  .card { background:var(--card); border-radius:4px; padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; }
+  .card.dragging { opacity:.4; }
+  .card .title { font-weight:500; }
+  .meta { display:flex; gap:6px; margin-top:6px; align-items:center; color:var(--muted); font-size:12px; }
+  .prio { padding:0 6px; border-radius:8px; border:1px solid var(--line); }
+  .prio.high { color:#c9372c; border-color:#c9372c; }
+  .prio.low { color:var(--ok); border-color:var(--ok); }
+  .bar { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--ok); }
+  .add { margin:8px; text-align:left; background:transparent; border-color:transparent; color:var(--muted); }
+  .newcol { width:200px; flex:none; }
+  /* modal */
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding-top:6vh; }
+  #modal.open { display:flex; }
+  .dialog { background:var(--bg); border-radius:8px; width:min(560px, 94vw); max-height:88vh; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .dialog label { font-size:12px; color:var(--muted); display:block; margin-bottom:2px; }
+  .dialog input, .dialog textarea, .dialog select { width:100%; }
+  .row { display:flex; gap:8px; }
+  .row > div { flex:1; }
+  .tp { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
+  .tp input[type=text] { flex:1; border:0; background:transparent; }
+  .tp.done input[type=text] { text-decoration:line-through; color:var(--muted); }
+  .tp input[type=checkbox] { width:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Phase Board</h1>
+  <select id="projectSel"></select>
+  <button id="newProject">+ Project</button>
+  <button id="renameProject">Rename</button>
+  <button id="delProject" class="link">Delete project</button>
+</header>
+<div id="board"></div>
+
+<div id="modal"><div class="dialog" id="dialog"></div></div>
+
+<script>
+const uid = () => Math.random().toString(36).slice(2, 9);
+let state = { projects: [] };
+let currentId = localStorage.getItem('currentProject');
+
+// ---------- persistence (debounced whole-state save) ----------
+let saveTimer;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => fetch('/api/state', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state)
+  }), 250);
+}
+const project = () => state.projects.find(p => p.id === currentId) || state.projects[0];
+
+// ---------- tiny DOM helper ----------
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else if (k in el) el[k] = v;
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid);
+  return el;
+}
+
+const progress = t => t.phases.length ? t.phases.filter(p => p.done).length / t.phases.length : 0;
+
+// ---------- header ----------
+function renderHeader() {
+  const sel = document.getElementById('projectSel');
+  sel.replaceChildren(...state.projects.map(p => h('option', { value: p.id, selected: p.id === project()?.id }, p.name)));
+}
+
+// ---------- board ----------
+let dragId = null;
+function render() {
+  renderHeader();
+  const board = document.getElementById('board');
+  const p = project();
+  if (!p) { board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
+
+  const cols = p.phases.map(ph => {
+    const tasks = p.tasks.filter(t => t.phaseId === ph.id);
+    const cards = h('div', { class: 'cards' }, tasks.map(cardEl));
+    const col = h('div', { class: 'col',
+      ondragover: e => { e.preventDefault(); col.classList.add('over'); },
+      ondragleave: () => col.classList.remove('over'),
+      ondrop: e => {
+        e.preventDefault();
+        const t = p.tasks.find(t => t.id === dragId);
+        if (!t) return;
+        // drop position: before the first card whose midpoint is below the cursor
+        // (skip the dragged card itself: it is removed from p.tasks below, so it can't be an anchor)
+        const after = [...cards.children].find(c => c.dataset.id !== t.id && e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
+        p.tasks.splice(p.tasks.indexOf(t), 1);
+        t.phaseId = ph.id;
+        const beforeTask = after && p.tasks.find(x => x.id === after.dataset.id);
+        p.tasks.splice(beforeTask ? p.tasks.indexOf(beforeTask) : p.tasks.length, 0, t);
+        save(); render();
+      },
+    },
+      h('div', { class: 'col-head' },
+        h('input', { value: ph.name, onchange: e => { ph.name = e.target.value.trim() || ph.name; save(); } }),
+        h('span', { class: 'count' }, tasks.length),
+        h('button', { class: 'link', title: 'Move left', onclick: () => movePhase(ph, -1) }, '‹'),
+        h('button', { class: 'link', title: 'Move right', onclick: () => movePhase(ph, 1) }, '›'),
+        h('button', { class: 'link', title: 'Delete phase', onclick: () => delPhase(ph) }, '✕')),
+      cards,
+      h('button', { class: 'add', onclick: () => addTask(ph) }, '+ Add task'));
+    return col;
+  });
+
+  board.replaceChildren(...cols,
+    h('button', { class: 'newcol', onclick: () => { p.phases.push({ id: uid(), name: 'New phase' }); save(); render(); } }, '+ Add phase'));
+}
+
+function cardEl(t) {
+  const pct = progress(t);
+  return h('div', { class: 'card', draggable: true, 'data-id': t.id,
+    ondragstart: e => { dragId = t.id; e.currentTarget.classList.add('dragging'); },
+    ondragend: e => { dragId = null; e.currentTarget.classList.remove('dragging'); },
+    onclick: () => openTask(t) },
+    h('div', { class: 'title' }, t.title),
+    h('div', { class: 'meta' },
+      h('span', { class: 'prio ' + t.priority }, t.priority),
+      t.phases.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${pct * 100}%` })),
+        h('span', {}, `${t.phases.filter(x => x.done).length}/${t.phases.length}`)] : null));
+}
+
+function movePhase(ph, d) {
+  const a = project().phases, i = a.indexOf(ph), j = i + d;
+  if (j < 0 || j >= a.length) return;
+  [a[i], a[j]] = [a[j], a[i]]; save(); render();
+}
+function delPhase(ph) {
+  const p = project(), n = p.tasks.filter(t => t.phaseId === ph.id).length;
+  if (n && !confirm(`Delete phase "${ph.name}" and its ${n} task(s)?`)) return;
+  p.phases = p.phases.filter(x => x !== ph);
+  p.tasks = p.tasks.filter(t => t.phaseId !== ph.id);
+  save(); render();
+}
+function addTask(ph) {
+  const t = { id: uid(), title: 'New task', description: '', phaseId: ph.id, priority: 'medium', phases: [] };
+  project().tasks.push(t); save(); render(); openTask(t);
+}
+
+// ---------- task modal (including the task's own phases) ----------
+const modal = document.getElementById('modal'), dialog = document.getElementById('dialog');
+modal.addEventListener('mousedown', e => { if (e.target === modal) closeTask(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTask(); });
+function closeTask() { modal.classList.remove('open'); render(); }
+
+function openTask(t) {
+  const p = project();
+  const phasesBox = h('div', { style: 'display:flex;flex-direction:column;gap:4px' });
+  const drawPhases = () => {
+    phasesBox.replaceChildren(...t.phases.map((tp, i) =>
+      h('div', { class: 'tp' + (tp.done ? ' done' : '') },
+        h('input', { type: 'checkbox', checked: tp.done, onchange: e => { tp.done = e.target.checked; save(); drawPhases(); } }),
+        h('input', { type: 'text', value: tp.name, onchange: e => { tp.name = e.target.value; save(); } }),
+        h('button', { class: 'link', onclick: () => { if (i) { [t.phases[i - 1], t.phases[i]] = [t.phases[i], t.phases[i - 1]]; save(); drawPhases(); } } }, '↑'),
+        h('button', { class: 'link', onclick: () => { t.phases.splice(i, 1); save(); drawPhases(); } }, '✕'))));
+  };
+  drawPhases();
+  const newPhase = h('input', { placeholder: 'Add a phase to this task and press Enter',
+    onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) {
+      t.phases.push({ id: uid(), name: e.target.value.trim(), done: false });
+      e.target.value = ''; save(); drawPhases(); } } });
+
+  dialog.replaceChildren(
+    h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } }),
+    h('div', { class: 'row' },
+      h('div', {}, h('label', {}, 'Project phase'),
+        h('select', { onchange: e => { t.phaseId = e.target.value; save(); } },
+          p.phases.map(ph => h('option', { value: ph.id, selected: ph.id === t.phaseId }, ph.name)))),
+      h('div', {}, h('label', {}, 'Priority'),
+        h('select', { onchange: e => { t.priority = e.target.value; save(); } },
+          ['low', 'medium', 'high'].map(v => h('option', { value: v, selected: v === t.priority }, v))))),
+    h('div', {}, h('label', {}, 'Description'),
+      h('textarea', { rows: 4, value: t.description, oninput: e => { t.description = e.target.value; save(); } })),
+    h('div', {}, h('label', {}, 'Task phases (steps this task moves through)'), phasesBox, newPhase),
+    h('div', { class: 'row', style: 'justify-content:space-between' },
+      h('button', { onclick: () => { if (confirm('Delete this task?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeTask(); } } }, 'Delete task'),
+      h('button', { class: 'primary', onclick: closeTask }, 'Done')));
+  modal.classList.add('open');
+}
+
+// ---------- project controls ----------
+document.getElementById('projectSel').onchange = e => { currentId = e.target.value; localStorage.setItem('currentProject', currentId); render(); };
+document.getElementById('newProject').onclick = () => {
+  const name = prompt('Project name?'); if (!name) return;
+  const p = { id: uid(), name, tasks: [], phases: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
+  state.projects.push(p); currentId = p.id; localStorage.setItem('currentProject', currentId); save(); render();
+};
+document.getElementById('renameProject').onclick = () => {
+  if (!project()) return;
+  const name = prompt('New name?', project().name); if (name) { project().name = name; save(); render(); }
+};
+document.getElementById('delProject').onclick = () => {
+  const cur = project(); if (!cur) return;
+  if (!confirm(`Delete project "${cur.name}" and all its tasks?`)) return;
+  state.projects = state.projects.filter(p => p !== cur); currentId = state.projects[0]?.id; save(); render();
+};
+
+fetch('/api/state').then(r => r.json()).then(s => { state = s; render(); });
+</script>
+</body>
+</html>
