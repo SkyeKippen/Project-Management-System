@@ -27,10 +27,10 @@ const seed = () => ({
     tasks: [{
       id: 't1', title: 'Design the schema', description: 'Tables, relations, indexes.',
       stageId: 'st1', priority: 'high',
-      phases: [
-        { id: 'tp1', name: 'Draft', done: true },
-        { id: 'tp2', name: 'Review', done: false },
-        { id: 'tp3', name: 'Finalize', done: false },
+      steps: [
+        { id: 's1', name: 'Draft', done: true },
+        { id: 's2', name: 'Review', done: false },
+        { id: 's3', name: 'Finalize', done: false },
       ],
     }],
   }],

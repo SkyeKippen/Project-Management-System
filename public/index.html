@@ -59,10 +59,20 @@
   .dialog input, .dialog textarea, .dialog select { width:100%; }
   .row { display:flex; gap:8px; }
   .row > div { flex:1; }
-  .tp { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
-  .tp input[type=text] { flex:1; border:0; background:transparent; }
-  .tp.done input[type=text] { text-decoration:line-through; color:var(--muted); }
-  .tp input[type=checkbox] { width:auto; }
+  .dialog input[type=checkbox] { width:auto; }
+  .dialog h2 { font-size:16px; margin:0; }
+  .dialog p { margin:0; }
+  .dialog .check { display:flex; align-items:center; gap:6px; font-size:14px; color:var(--text); cursor:pointer; }
+  button.danger { background:#c9372c; border-color:#c9372c; color:#fff; }
+  .step { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
+  .step input[type=text] { flex:1; border:0; background:transparent; }
+  .step.done input[type=text] { text-decoration:line-through; color:var(--muted); }
+  /* orphaned cards */
+  .tab.orphans { margin-left:auto; }
+  .tab.orphans .count { background:var(--line); border-radius:8px; padding:0 6px; }
+  .tab.orphans.has .count { background:#c9372c; color:#fff; }
+  .from { color:var(--muted); font-size:12px; margin-top:4px; }
+  .hint { color:var(--muted); font-size:12px; padding:0 4px; }
 </style>
 </head>
 <body>
@@ -79,7 +89,9 @@
 <div id="modal"><div class="dialog" id="dialog"></div></div>
 
 <script>
-// Data shape: project { majorPhases: [{ id, name, stages: [{ id, name }] }], tasks: [{ id, stageId, phases: [...] , ... }] }
+// Data shape: project { majorPhases: [{ id, name, stages: [{ id, name }] }],
+//                       tasks: [{ id, stageId, steps: [{ id, name, done }], orphanedFrom?, ... }] }
+// A task whose stageId matches no stage (null after a delete) is an orphan.
 const uid = () => Math.random().toString(36).slice(2, 9);
 let state = { projects: [] };
 let currentId = localStorage.getItem('currentProject');
@@ -94,26 +106,36 @@ function save() {
 }
 const project = () => state.projects.find(p => p.id === currentId) || state.projects[0];
 
-// Old shape had project.phases (board columns) and task.phaseId: those become the stages of one major phase.
 function migrate(s) {
   let changed = false;
   for (const p of s.projects) {
-    if (p.majorPhases) continue;
-    p.majorPhases = [{ id: uid(), name: 'Phase 1', stages: p.phases || [] }];
-    for (const t of p.tasks) { t.stageId = t.phaseId; delete t.phaseId; }
-    delete p.phases;
-    changed = true;
+    // old shape: project.phases (board columns) + task.phaseId -> stages of one major phase
+    if (!p.majorPhases) {
+      p.majorPhases = [{ id: uid(), name: 'Phase 1', stages: p.phases || [] }];
+      for (const t of p.tasks) { t.stageId = t.phaseId; delete t.phaseId; }
+      delete p.phases;
+      changed = true;
+    }
+    // task.phases (a task's own checklist) was renamed to task.steps
+    for (const t of p.tasks) if (!t.steps) { t.steps = t.phases || []; delete t.phases; changed = true; }
   }
   return changed;
 }
 
-// selected major phase, remembered per project
-const majorKey = p => 'currentMajor:' + p.id;
+const orphansOf = p => {
+  const ids = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
+  return p.tasks.filter(t => !ids.has(t.stageId));
+};
+
+// selected view per project: a major phase id, or ORPHANS for the orphaned cards page
+const ORPHANS = 'orphans';
+const viewKey = p => 'currentMajor:' + p.id;
+const showingOrphans = () => localStorage.getItem(viewKey(project())) === ORPHANS;
 const currentMajor = () => {
-  const p = project(), id = localStorage.getItem(majorKey(p));
+  const p = project(), id = localStorage.getItem(viewKey(p));
   return p.majorPhases.find(m => m.id === id) || p.majorPhases[0];
 };
-const setMajor = m => localStorage.setItem(majorKey(project()), m.id);
+const setView = id => localStorage.setItem(viewKey(project()), id);
 
 // ---------- tiny DOM helper ----------
 function h(tag, props = {}, ...kids) {
@@ -128,7 +150,7 @@ function h(tag, props = {}, ...kids) {
   return el;
 }
 
-const progress = t => t.phases.length ? t.phases.filter(p => p.done).length / t.phases.length : 0;
+const progress = t => t.steps.length ? t.steps.filter(s => s.done).length / t.steps.length : 0;
 
 // ---------- header ----------
 function renderHeader() {
@@ -143,29 +165,37 @@ function render() {
   const tabs = document.getElementById('tabs'), board = document.getElementById('board');
   const p = project();
   if (!p) { tabs.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
-  const mp = currentMajor();
+  const orphans = showingOrphans(), mp = orphans ? null : currentMajor();
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
-    h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'));
-  if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
+    h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'),
+    orphanTabEl(p, orphans));
 
+  if (orphans) { board.replaceChildren(orphanPage(p)); return; }
+  if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
   board.replaceChildren(...mp.stages.map(st => stageEl(p, mp, st)),
     h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: 'New stage' }); save(); render(); } }, '+ Add stage'));
 }
 
-function tabEl(p, m, active) {
-  const n = p.tasks.filter(t => m.stages.some(s => s.id === t.stageId)).length;
-  const tab = h('div', { class: 'tab' + (active ? ' active' : ''),
-    onclick: () => { if (!active) { setMajor(m); render(); } },
-    // dropping a card on a tab moves it to that major phase's first stage
-    ondragover: e => { if (dragId && m.stages.length) { e.preventDefault(); tab.classList.add('over'); } },
-    ondragleave: () => tab.classList.remove('over'),
+// drag-target props for a tab: dropping a card on it calls onDrop(task)
+function tabDrop(p, accepts, onDrop) {
+  return {
+    ondragover: e => { if (dragId && accepts()) { e.preventDefault(); e.currentTarget.classList.add('over'); } },
+    ondragleave: e => e.currentTarget.classList.remove('over'),
     ondrop: e => {
       e.preventDefault();
       const t = p.tasks.find(x => x.id === dragId);
-      if (!t || !m.stages.length) return;
-      moveTask(p, t, m.stages[0].id, null); setMajor(m); save(); render();
-    } },
+      if (t && accepts()) { onDrop(t); save(); render(); }
+    },
+  };
+}
+
+function tabEl(p, m, active) {
+  const n = p.tasks.filter(t => m.stages.some(s => s.id === t.stageId)).length;
+  return h('div', { class: 'tab' + (active ? ' active' : ''),
+    onclick: () => { if (!active) { setView(m.id); render(); } },
+    // dropping a card on a tab moves it to that major phase's first stage
+    ...tabDrop(p, () => m.stages.length, t => { moveTask(p, t, m.stages[0].id, null); setView(m.id); }) },
     active
       ? h('input', { value: m.name, size: Math.max(6, m.name.length), onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
       : h('span', { class: 'name' }, m.name),
@@ -174,11 +204,18 @@ function tabEl(p, m, active) {
       h('button', { class: 'link', title: 'Move left', onclick: () => moveIn(p.majorPhases, m, -1) }, '‹'),
       h('button', { class: 'link', title: 'Move right', onclick: () => moveIn(p.majorPhases, m, 1) }, '›'),
       h('button', { class: 'link', title: 'Delete major phase', onclick: () => delMajor(m) }, '✕')] : null);
-  return tab;
 }
 
-function stageEl(p, mp, st) {
-  const tasks = p.tasks.filter(t => t.stageId === st.id);
+function orphanTabEl(p, active) {
+  const n = orphansOf(p).length;
+  return h('div', { class: 'tab orphans' + (active ? ' active' : '') + (n ? ' has' : ''), title: 'Cards whose stage or major phase was deleted',
+    onclick: () => { if (!active) { setView(ORPHANS); render(); } },
+    ...tabDrop(p, () => true, t => orphan(p, [t], null)) },
+    h('span', { class: 'name' }, 'Orphaned cards'), h('span', { class: 'count' }, n));
+}
+
+// cards row with drop positioning; stageId null is the orphaned cards row
+function cardsRow(p, tasks, stageId, ...head) {
   const cards = h('div', { class: 'cards' }, tasks.map(cardEl));
   const row = h('div', { class: 'stage',
     ondragover: e => { e.preventDefault(); row.classList.add('over'); },
@@ -194,20 +231,33 @@ function stageEl(p, mp, st) {
         const r = c.getBoundingClientRect();
         return e.clientY < r.top || (e.clientY < r.bottom && e.clientX < r.left + r.width / 2);
       });
-      moveTask(p, t, st.id, after && p.tasks.find(x => x.id === after.dataset.id));
+      const before = after && p.tasks.find(x => x.id === after.dataset.id);
+      if (stageId) moveTask(p, t, stageId, before);
+      else { if (!orphansOf(p).includes(t)) orphan(p, [t], null); moveTask(p, t, t.stageId, before); }
       save(); render();
     },
-  },
-    h('div', { class: 'stage-head' },
-      h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } }),
-      h('div', { class: 'tools' },
-        h('span', { class: 'count' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
-        h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
-        h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
-        h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
-      h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task')),
-    cards);
+  }, h('div', { class: 'stage-head' }, ...head), cards);
   return row;
+}
+
+function stageEl(p, mp, st) {
+  const tasks = p.tasks.filter(t => t.stageId === st.id);
+  return cardsRow(p, tasks, st.id,
+    h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } }),
+    h('div', { class: 'tools' },
+      h('span', { class: 'count' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
+      h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
+      h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
+      h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
+    h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task'));
+}
+
+function orphanPage(p) {
+  const tasks = orphansOf(p);
+  return cardsRow(p, tasks, null,
+    h('strong', { style: 'padding:5px 8px' }, 'Orphaned cards'),
+    h('span', { class: 'count', style: 'padding:0 8px' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
+    h('p', { class: 'hint' }, 'Cards left behind when their stage or major phase was deleted. Drag one onto a major phase tab, or open it to pick a stage.'));
 }
 
 function cardEl(t) {
@@ -219,14 +269,24 @@ function cardEl(t) {
     h('div', { class: 'title' }, t.title),
     h('div', { class: 'meta' },
       h('span', { class: 'prio ' + t.priority }, t.priority),
-      t.phases.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${pct * 100}%` })),
-        h('span', {}, `${t.phases.filter(x => x.done).length}/${t.phases.length}`)] : null));
+      t.steps.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${pct * 100}%` })),
+        h('span', {}, `${t.steps.filter(x => x.done).length}/${t.steps.length}`)] : null),
+    t.orphanedFrom ? h('div', { class: 'from' }, 'From: ' + t.orphanedFrom) : null);
 }
 
 function moveTask(p, t, stageId, before) {
   p.tasks.splice(p.tasks.indexOf(t), 1);
   t.stageId = stageId;
+  if (stageId) delete t.orphanedFrom;
   p.tasks.splice(before ? p.tasks.indexOf(before) : p.tasks.length, 0, t);
+}
+// detach tasks from their stage, remembering where they were ("Major › Stage")
+function orphan(p, tasks, from) {
+  for (const t of tasks) {
+    const m = p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId));
+    t.orphanedFrom = from || (m ? `${m.name} › ${m.stages.find(s => s.id === t.stageId).name}` : t.orphanedFrom);
+    t.stageId = null;
+  }
 }
 function moveIn(a, x, d) {
   const i = a.indexOf(x), j = i + d;
@@ -235,67 +295,90 @@ function moveIn(a, x, d) {
 }
 function addMajor() {
   const m = { id: uid(), name: 'New phase', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
-  project().majorPhases.push(m); setMajor(m); save(); render();
+  project().majorPhases.push(m); setView(m.id); save(); render();
 }
+// stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked
 function delMajor(m) {
-  const p = project(), ids = new Set(m.stages.map(s => s.id)), n = p.tasks.filter(t => ids.has(t.stageId)).length;
-  if (!confirm(`Delete major phase "${m.name}", its ${m.stages.length} stage(s) and ${n} task(s)?`)) return;
-  p.majorPhases = p.majorPhases.filter(x => x !== m);
-  p.tasks = p.tasks.filter(t => !ids.has(t.stageId));
-  save(); render();
+  const p = project(), ids = new Set(m.stages.map(s => s.id)), cards = p.tasks.filter(t => ids.has(t.stageId));
+  confirmDelete(`major phase "${m.name}"`, `${m.stages.length} stage(s) and ${cards.length} card(s)`, cards.length, delCards => {
+    if (delCards) p.tasks = p.tasks.filter(t => !cards.includes(t)); else orphan(p, cards);
+    p.majorPhases = p.majorPhases.filter(x => x !== m);
+  });
 }
 function delStage(mp, st) {
-  const p = project(), n = p.tasks.filter(t => t.stageId === st.id).length;
-  if (n && !confirm(`Delete stage "${st.name}" and its ${n} task(s)?`)) return;
-  mp.stages = mp.stages.filter(x => x !== st);
-  p.tasks = p.tasks.filter(t => t.stageId !== st.id);
-  save(); render();
+  const p = project(), cards = p.tasks.filter(t => t.stageId === st.id);
+  confirmDelete(`stage "${st.name}"`, `${cards.length} card(s)`, cards.length, delCards => {
+    if (delCards) p.tasks = p.tasks.filter(t => !cards.includes(t)); else orphan(p, cards);
+    mp.stages = mp.stages.filter(x => x !== st);
+  });
 }
 function addTask(st) {
-  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, priority: 'medium', phases: [] };
+  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, priority: 'medium', steps: [] };
   project().tasks.push(t); save(); render(); openTask(t);
 }
 
-// ---------- task modal (including the task's own phases) ----------
+// ---------- modal: task dialog and delete confirmation ----------
 const modal = document.getElementById('modal'), dialog = document.getElementById('dialog');
-modal.addEventListener('mousedown', e => { if (e.target === modal) closeTask(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTask(); });
-function closeTask() { modal.classList.remove('open'); render(); }
+modal.addEventListener('mousedown', e => { if (e.target === modal) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+function closeModal() { modal.classList.remove('open'); render(); }
+
+function confirmDelete(what, holds, nCards, onConfirm) {
+  const box = h('input', { type: 'checkbox', onchange: () => { note.textContent = outcome(); } });
+  const outcome = () => box.checked ? `The ${nCards} card(s) will be permanently deleted.`
+    : `The ${nCards} card(s) will be moved to Orphaned cards.`;
+  const note = h('p', { class: 'count' }, outcome());
+  dialog.replaceChildren(
+    h('h2', {}, `Delete ${what}?`),
+    h('p', {}, `It holds ${holds}.`),
+    ...(nCards ? [h('label', { class: 'check' }, box, 'Delete cards'), note] : []),
+    h('div', { class: 'row', style: 'justify-content:flex-end' },
+      h('button', { onclick: closeModal }, 'Cancel'),
+      h('button', { class: 'danger', onclick: () => { onConfirm(box.checked); save(); closeModal(); } }, 'Delete')));
+  modal.classList.add('open');
+}
 
 function openTask(t) {
   const p = project();
-  const phasesBox = h('div', { style: 'display:flex;flex-direction:column;gap:4px' });
-  const drawPhases = () => {
-    phasesBox.replaceChildren(...t.phases.map((tp, i) =>
-      h('div', { class: 'tp' + (tp.done ? ' done' : '') },
-        h('input', { type: 'checkbox', checked: tp.done, onchange: e => { tp.done = e.target.checked; save(); drawPhases(); } }),
-        h('input', { type: 'text', value: tp.name, onchange: e => { tp.name = e.target.value; save(); } }),
-        h('button', { class: 'link', onclick: () => { if (i) { [t.phases[i - 1], t.phases[i]] = [t.phases[i], t.phases[i - 1]]; save(); drawPhases(); } } }, '↑'),
-        h('button', { class: 'link', onclick: () => { t.phases.splice(i, 1); save(); drawPhases(); } }, '✕'))));
+  const stepsBox = h('div', { style: 'display:flex;flex-direction:column;gap:4px' });
+  const drawSteps = () => {
+    stepsBox.replaceChildren(...t.steps.map((s, i) =>
+      h('div', { class: 'step' + (s.done ? ' done' : '') },
+        h('input', { type: 'checkbox', checked: s.done, onchange: e => { s.done = e.target.checked; save(); drawSteps(); } }),
+        h('input', { type: 'text', value: s.name, onchange: e => { s.name = e.target.value; save(); } }),
+        h('button', { class: 'link', onclick: () => { if (i) { [t.steps[i - 1], t.steps[i]] = [t.steps[i], t.steps[i - 1]]; save(); drawSteps(); } } }, '↑'),
+        h('button', { class: 'link', onclick: () => { t.steps.splice(i, 1); save(); drawSteps(); } }, '✕'))));
   };
-  drawPhases();
-  const newPhase = h('input', { placeholder: 'Add a phase to this task and press Enter',
+  drawSteps();
+  const newStep = h('input', { placeholder: 'Add a step and press Enter',
     onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) {
-      t.phases.push({ id: uid(), name: e.target.value.trim(), done: false });
-      e.target.value = ''; save(); drawPhases(); } } });
+      t.steps.push({ id: uid(), name: e.target.value.trim(), done: false });
+      e.target.value = ''; save(); drawSteps(); } } });
+  const isOrphan = orphansOf(p).includes(t);
 
   dialog.replaceChildren(
     h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } }),
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Stage'),
-        // the board follows the card if it moves to another major phase
-        h('select', { onchange: e => { t.stageId = e.target.value; setMajor(p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId))); save(); } },
+        // the board follows the card to wherever it is moved
+        h('select', { onchange: e => {
+            const id = e.target.value;
+            if (id) { t.stageId = id; delete t.orphanedFrom; setView(p.majorPhases.find(m => m.stages.some(s => s.id === id)).id); }
+            else { orphan(p, [t]); setView(ORPHANS); }
+            save(); } },
+          h('option', { value: '', selected: isOrphan }, '— Orphaned (no stage) —'),
           p.majorPhases.map(m => h('optgroup', { label: m.name },
             m.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name)))))),
       h('div', {}, h('label', {}, 'Priority'),
         h('select', { onchange: e => { t.priority = e.target.value; save(); } },
           ['low', 'medium', 'high'].map(v => h('option', { value: v, selected: v === t.priority }, v))))),
+    t.orphanedFrom ? h('p', { class: 'from' }, 'Orphaned from: ' + t.orphanedFrom) : null,
     h('div', {}, h('label', {}, 'Description'),
       h('textarea', { rows: 4, value: t.description, oninput: e => { t.description = e.target.value; save(); } })),
-    h('div', {}, h('label', {}, 'Task phases (steps this task moves through)'), phasesBox, newPhase),
+    h('div', {}, h('label', {}, 'Steps'), stepsBox, newStep),
     h('div', { class: 'row', style: 'justify-content:space-between' },
-      h('button', { onclick: () => { if (confirm('Delete this task?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeTask(); } } }, 'Delete task'),
-      h('button', { class: 'primary', onclick: closeTask }, 'Done')));
+      h('button', { onclick: () => { if (confirm('Delete this task?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
+      h('button', { class: 'primary', onclick: closeModal }, 'Done')));
   modal.classList.add('open');
 }
 

@@ -5,9 +5,10 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 - **Major phases** are tabs across the top of the board (add, rename, reorder, delete). The selected tab is remembered per project.
 - **Stages** are rows stacked top to bottom inside a major phase (add, rename, move up/down, delete).
 - **Cards** (tasks) flow left to right within a stage and wrap onto new lines. Drag them within a stage, between stages, or onto another major phase's tab, which moves the card to that phase's first stage.
-- Each task can also have its own list of phases, with a progress bar on the card.
+- Each task can also have its own checklist of **steps**, with a progress bar on the card.
+- **Orphaned cards**: deleting a stage or major phase asks for confirmation, with a "Delete cards" checkbox. Unticked (the default), its cards move to the *Orphaned cards* tab at the right of the tab bar, labelled with where they came from. From there, drag a card onto a major phase tab or open it and pick a stage.
 
-Data saved by older versions (project phases as columns) is migrated on load: the old columns become the stages of a single major phase named "Phase 1".
+Data saved by older versions is migrated on load: old board columns become the stages of a single major phase named "Phase 1", and task "phases" become steps.
 
 No dependencies beyond Node.js 18 or newer.
 
