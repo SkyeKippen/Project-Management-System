@@ -76,5 +76,5 @@
     return root;
   }
 
-  Object.assign(exports, { diff, apply, clone });
+  Object.assign(exports, { diff, apply, clone, resolve });
 })(typeof module !== 'undefined' ? module.exports : (window.Sync = {}));

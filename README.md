@@ -7,6 +7,16 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 - **Cards** (tasks) flow left to right within a stage and wrap onto new lines. Drag them within a stage, between stages, or onto another major phase's tab, which moves the card to that phase's first stage.
 - **Orphaned cards**: deleting a stage or major phase asks for confirmation, with a "Delete cards" checkbox. Unticked (the default), its cards move to the *Orphaned cards* tab at the right of the tab bar, labelled with where they came from. From there, drag a card onto a major phase tab or open it and pick a stage.
 
+### Done stages and archiving
+
+Tick **Done stage** on any stage (one or more per major phase; stages named "Done" start ticked). Each major phase tab shows its progress: cards in done stages, plus archived cards, as a share of all its cards. Archive a card from its dialog, or everything showing in a done stage with **Archive all**. Archived cards leave the board and appear under the **Archived** tab, where opening one lets you unarchive it back to its stage.
+
+### Recently deleted and undo
+
+Deleted cards, stages, major phases, projects and attachments go to **Recently deleted** for 30 days, along with any attachment files. **Restore** puts an item back where it was. If its parent has gone too, the parent is restored with it where possible; a card whose stage no longer exists returns to Orphaned cards. **Delete forever** removes it immediately, and anything older than 30 days is removed automatically.
+
+**Undo** (the header button, the prompt after a change, or Ctrl+Z outside a text field) reverses your own recent changes in this browser, and everyone sees the result. If someone else has since changed the same thing, that part is left alone and you're told. The undo history is lost when the page is reloaded.
+
 ### Cards
 
 - **Category** (required): each project has its own list, by default *Bugfix*, *Feature Addition*, *Optimization*, *Planning* (orange) and *Other* (grey). The category's colour is the stripe down the card's left edge. New cards start as *Feature Addition*. Edit the list under **Categories & tags**; deleting a category asks which category its cards should move to.
@@ -16,7 +26,8 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 - **Assignee** (optional), on the card and on each of its steps, shown as an initials avatar. People are shared by every project. Pick someone from the dropdown, or choose **+ New person…** to add them (a name that already exists, ignoring case, reuses that person). Rename, add or delete people under **People**; deleting someone unassigns them everywhere.
 - **Filters**: the chips under the tabs filter the board by category, tag and person (only categories and tags some card uses are shown). Within each group, selecting several shows cards matching *any* of them. When several groups have selections, a card must match each of them (e.g. a category AND a tag). A card matches a person if they're assigned to the card or to any of its steps. With nothing selected, every card shows. Filters are per viewer and aren't shared with others. While filtering, stage counts read *visible/total*.
 - **Description** in Markdown: headings, **bold**, *italic*, ~~strike~~, `code`, code blocks, lists, `- [ ]` task items, quotes and links. Rendering is built in and escapes all HTML; only http(s) and mailto links are allowed.
-- **Attachments**: attach files from the dialog or drop them onto it (up to 25 MB each by default). Images get a thumbnail. Files are always served as downloads, never opened in the page. Removing an attachment, or deleting its card, deletes the file.
+- **Attachments**: attach files from the dialog or drop them onto it (up to 25 MB each by default). Images get a thumbnail. Files are always served as downloads, never opened in the page. Removing an attachment, or deleting its card, sends it to Recently deleted; the file is deleted when that entry is.
+- **Comments**: a thread on each card, in Markdown, updated live. People can edit and delete their own. The card shows a comment count. Your name comes from Cloudflare Access when it's in front of the app (matched to, or added to, People by email); otherwise choose it under **You are** at the top of the page, remembered in that browser.
 - **Steps**: a checklist per card, with a progress bar on the card.
 
 Data saved by older versions is upgraded when the server starts: old board columns become the stages of a single major phase named "Phase 1", task "phases" become steps, existing cards get the *Feature Addition* category, and unknown priorities become Medium. Before any upgrade, the file as it was is copied to `backups/pre-upgrade-<time>.json`.
@@ -38,6 +49,7 @@ Then open http://127.0.0.1:3101. On startup the server prints every address it c
 | `MAX_UPLOAD_MB` | `25` | Largest attachment accepted, in MB. Cloudflare's free plan caps requests at 100 MB. |
 | `BACKUP_INTERVAL_HOURS` | `12` | How often `data.json` is backed up. |
 | `BACKUP_KEEP_DAYS` | `14` | How long backups are kept. |
+| `TRASH_KEEP_DAYS` | `30` | How long deleted items stay in Recently deleted. |
 
 ## Data
 
@@ -61,4 +73,5 @@ The app has **no authentication of its own**. Anyone who can reach the port can 
 
 - Point the tunnel's service at `http://<server-LAN-IP>:3101`, using plain `http` (Cloudflare provides HTTPS to visitors). If `cloudflared` runs on the same machine, use `http://127.0.0.1:3101`.
 - Put a **Cloudflare Access** application (with an allow policy for the people who should get in) in front of the tunnel's hostname. Without Access, the tunnel makes the board public.
+- Comment authorship relies on the `Cf-Access-Authenticated-User-Email` header, and "edit your own" is enforced in the page only. Anyone reaching the port directly, bypassing Access, can claim any name.
 - Access only protects the public hostname. Because the app listens on all interfaces by default, anyone who can reach the server's port on your network can open the board directly. Ideally allow port 3101 only from the `cloudflared` machine, or set `HOST=127.0.0.1` when `cloudflared` runs on the same machine.

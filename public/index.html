@@ -22,7 +22,26 @@
   button.danger { background:var(--danger); border-color:var(--danger); color:#fff; }
   input, select, textarea { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 8px; }
   input[type=color] { width:32px; height:28px; padding:2px; flex:none; }
-  #status { margin-left:auto; font-size:12px; }
+  #me { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  #me select { max-width:140px; padding:2px 4px; font-size:12px; }
+  #status { font-size:12px; }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); z-index:10; display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:8px 14px; box-shadow:0 2px 10px rgba(0,0,0,.35); }
+  #toast[hidden] { display:none; }
+  #toast button { color:var(--accent); font-weight:600; }
+  /* done stages and progress */
+  .tab-progress { display:inline-flex; align-items:center; gap:4px; font-size:11px; margin-left:4px; }
+  .tab-progress .bar { display:inline-block; flex:none; width:36px; min-width:0; }
+  .done-toggle { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); padding-left:8px; cursor:pointer; }
+  .stage-head .done-toggle input { width:auto; flex:none; }
+  .stage.done-stage .stage-head { border-right-color:var(--ok); border-right-width:3px; }
+  /* comments */
+  .comment { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:6px 8px; display:flex; flex-direction:column; gap:4px; }
+  .comment-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .comment-tools { margin-left:auto; }
+  .comment .comment-body { border:0; background:none; padding:0; min-height:0; }
+  /* bin */
+  .bin-text { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .bin-item button { flex:none; white-space:nowrap; }
   #status.live { color:var(--ok); }
   #status.offline { color:var(--muted); }
   /* major phase tabs */
@@ -141,7 +160,10 @@
   <button id="renameProject">Rename</button>
   <button id="labels">Categories &amp; tags</button>
   <button id="people">People</button>
+  <button id="bin">Recently deleted (0)</button>
+  <button id="undo" disabled title="Undo your last change (Ctrl+Z)">↶ Undo</button>
   <button id="delProject" class="link">Delete project</button>
+  <span id="me"></span>
   <span id="status" class="offline">● Connecting…</span>
 </header>
 <nav id="tabs"></nav>
@@ -149,6 +171,7 @@
 <div id="board"></div>
 
 <div id="modal"><div class="dialog" id="dialog"></div></div>
+<div id="toast" hidden></div>
 
 <script src="sync.js"></script>
 <script src="model.js"></script>
@@ -175,8 +198,8 @@ let currentId = store.get('currentProject');
 // save() sends diff(base, state) as ops. Every new server state, whether from our own save or someone else's,
 // is folded in with diff(base, server) applied to `state` in place, so unsent local edits and the objects an
 // open dialog is holding on to survive.
-let base = null, baseVersion = 0, saveTimer, sending = false;
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 120); }
+let base = null, baseVersion = 0, saveTimer, sending = false, trashCount = 0;
+function save() { checkpoint(); clearTimeout(saveTimer); saveTimer = setTimeout(flush, 120); }
 async function flush() {
   if (sending || !base) return;
   const ops = Sync.diff(base, state);
@@ -190,13 +213,93 @@ async function flush() {
   sending = false;
   if (ok) flush(); else { setStatus(false); setTimeout(flush, 2000); }  // unsent edits stay in `state` and are retried
 }
-function receive({ version, state: remote }) {
+function receive({ version, state: remote, trashCount: n }) {
+  if (n !== undefined) { trashCount = n; document.getElementById('bin').textContent = `Recently deleted (${n})`; }
   if (version <= baseVersion) return;
-  if (state) Sync.apply(state, Sync.diff(base, remote));
-  else state = Sync.clone(remote);
+  if (state) { const ops = Sync.diff(base, remote); Sync.apply(state, ops); Sync.apply(undoSnap, ops); }
+  else { state = Sync.clone(remote); undoSnap = Sync.clone(remote); }
   base = remote; baseVersion = version;
   renderSoon();
   if (syncDialog) syncDialog();
+}
+
+// ---------- undo (your own changes, in this browser) ----------
+// Every local change is recorded as the ops that reverse it, sent like any other edit, so an undo reaches everyone.
+// undoSnap is the board as of the last recorded change, kept up to date with other people's changes, so only yours
+// are ever reversed. Each op remembers the value it expects to find: if someone has changed that since, it's skipped.
+let undoSnap = null;
+const undoStack = [];
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const undoTarget = (root, op) => {
+  const t = Sync.resolve(root, op.path);
+  if (op.op === 'set') return t?.[op.key];
+  return op.op === 'remove' && Array.isArray(t) ? t.find(e => e.id === op.id) : undefined;
+};
+function describeChange(forward) {
+  const last = o => o.path[o.path.length - 1];
+  const removed = forward.find(o => o.op === 'remove'), added = forward.find(o => o.op === 'insert');
+  const names = { tasks: 'Card', stages: 'Stage', majorPhases: 'Major phase', projects: 'Project', attachments: 'Attachment', steps: 'Step', comments: 'Comment' };
+  if (removed && names[last(removed)]) return `${names[last(removed)]} deleted`;
+  if (added && names[last(added)]) return `${names[last(added)]} added`;
+  if (forward.some(o => o.key === 'archived')) return 'Card archived';
+  if (forward.some(o => o.key === 'stageId' || o.op === 'order')) return 'Moved';
+  return 'Change saved';
+}
+function checkpoint() {
+  if (!state) return;
+  const inverse = Sync.diff(state, undoSnap);
+  if (!inverse.length) return;
+  const steps = inverse.map(op => ({ op, expect: Sync.clone(undoTarget(state, op)) }));
+  // a tag the server has since removed (no card used it) has to come back with the cards that used it
+  const tagDefs = [];
+  for (const op of inverse) {
+    const ids = op.op === 'set' && op.key === 'tags' ? op.value : op.op === 'insert' ? op.value.tags : null;
+    const tags = Array.isArray(ids) && Sync.resolve(undoSnap, op.path.slice(0, 2))?.tags;
+    if (tags) for (const g of tags) if (ids.includes(g.id)) tagDefs.push({ projectId: op.path[1], def: Sync.clone(g) });
+  }
+  const now = Date.now(), top = undoStack[undoStack.length - 1], one = steps[0].op;
+  // a burst of typing in one field is one undo
+  const typing = steps.length === 1 && one.op === 'set' && typeof one.value === 'string' && top && now - top.at < 2000 && top.steps.length === 1 &&
+    top.steps[0].op.op === 'set' && top.steps[0].op.key === one.key && sameJson(top.steps[0].op.path, one.path);
+  if (typing) { top.steps[0].expect = steps[0].expect; top.at = now; }
+  else {
+    undoStack.push({ steps, tagDefs, at: now });
+    if (undoStack.length > 50) undoStack.shift();
+    toast(describeChange(Sync.diff(undoSnap, state)), 'Undo', undo);
+  }
+  undoSnap = Sync.clone(state);
+  document.getElementById('undo').disabled = !undoStack.length;
+}
+function undo() {
+  checkpoint();
+  const e = undoStack.pop();
+  document.getElementById('undo').disabled = !undoStack.length;
+  if (!e) return toast('Nothing to undo');
+  const stillValid = ({ op, expect }) => op.op === 'set' || op.op === 'remove' ? sameJson(undoTarget(state, op), expect) : Array.isArray(Sync.resolve(state, op.path));
+  const ok = e.steps.filter(stillValid), skipped = e.steps.length - ok.length;
+  if (!ok.length) return toast('Couldn’t undo: someone else has changed this since.');
+  for (const { projectId, def } of e.tagDefs) {
+    const p = state.projects.find(x => x.id === projectId);
+    if (p && !p.tags.some(g => g.id === def.id)) p.tags.push(def);
+  }
+  Sync.apply(state, ok.map(s => s.op));
+  undoSnap = Sync.clone(state);
+  save(); render();
+  if (syncDialog) syncDialog();
+  toast(skipped ? `Undone, except ${skipped} change(s) someone else has since overtaken.` : 'Undone');
+}
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+  // inside a text field, Ctrl+Z is the browser's own text undo
+  if (document.activeElement?.matches('input:not([type=checkbox]), textarea')) return;
+  e.preventDefault(); undo();
+});
+let toastTimer;
+function toast(text, actionLabel, action) {
+  const el = document.getElementById('toast');
+  el.replaceChildren(h('span', {}, text), ...(action ? [h('button', { class: 'link', onclick: () => { el.hidden = true; action(); } }, actionLabel)] : []));
+  el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
 }
 function connect() {
   const es = new EventSource('/api/events');  // reconnects by itself; the server sends the full state on (re)connect
@@ -221,16 +324,26 @@ const project = () => state.projects.find(p => p.id === currentId) || state.proj
 
 const orphansOf = p => {
   const ids = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
-  return p.tasks.filter(t => !ids.has(t.stageId));
+  return p.tasks.filter(t => !t.archived && !ids.has(t.stageId));
 };
+const archivedOf = p => p.tasks.filter(t => t.archived);
+const setArchived = (t, on) => { if (on) { t.archived = true; t.archivedAt = new Date().toISOString(); } else { delete t.archived; delete t.archivedAt; } };
+// done = in a done stage, or archived from any of this major phase's stages
+function phaseProgress(p, m) {
+  const ids = new Set(m.stages.map(s => s.id)), all = p.tasks.filter(t => ids.has(t.stageId));
+  const done = all.filter(t => t.archived || m.stages.find(s => s.id === t.stageId).done).length;
+  return { all: all.length, done, pct: all.length ? Math.round(done / all.length * 100) : 0 };
+}
+const defaultStages = () => ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n, ...(n === 'Done' ? { done: true } : {}) }));
 const categoryOf = (p, t) => p.categories.find(c => c.id === t.categoryId) || Model.defaultCategory(p);
 const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
-// selected view per project: a major phase id, or ORPHANS for the orphaned cards page
-const ORPHANS = 'orphans';
+// selected view per project: a major phase id, or ORPHANS/ARCHIVED for those pages
+const ORPHANS = 'orphans', ARCHIVED = 'archived';
 const viewKey = p => 'currentMajor:' + p.id;
 const showingOrphans = () => store.get(viewKey(project())) === ORPHANS;
+const showingArchived = () => store.get(viewKey(project())) === ARCHIVED;
 const currentMajor = () => {
   const p = project(), id = store.get(viewKey(p));
   return p.majorPhases.find(m => m.id === id) || p.majorPhases[0];
@@ -291,7 +404,7 @@ function findOrAddPerson(name) {
 }
 // assignment dropdown: Unassigned, everyone (shared across projects), and "+ New person…"
 const NEW_PERSON = '__new__';
-function personSelect(getId, setId) {
+function personSelect(getId, setId, emptyLabel = 'Unassigned') {
   const sel = h('select', { onchange: () => {
     if (sel.value === NEW_PERSON) {
       const x = findOrAddPerson(prompt('New person’s name?'));
@@ -300,7 +413,7 @@ function personSelect(getId, setId) {
     save(); fill();
   } });
   const fill = () => sel.replaceChildren(
-    h('option', { value: '' }, 'Unassigned'),
+    h('option', { value: '' }, emptyLabel),
     ...[...state.people].sort((a, b) => a.name.localeCompare(b.name)).map(x => h('option', { value: x.id, selected: x.id === getId() }, x.name)),
     h('option', { value: NEW_PERSON }, '+ New person…'));
   fill();
@@ -309,10 +422,19 @@ function personSelect(getId, setId) {
 }
 const assign = (x, id) => { if (id) x.assigneeId = id; else delete x.assigneeId; };
 
+// who this viewer is, for comments: from Cloudflare Access when it's in front of the app, else their own pick in this browser
+let accessPersonId = null;
+const me = () => personById(accessPersonId || store.get('myPerson'));
+fetch('/api/me').then(r => r.json()).then(x => { accessPersonId = x.personId; if (state) { renderHeader(); if (syncDialog) syncDialog(); } }).catch(() => {});
+
 // ---------- header ----------
 function renderHeader() {
   const sel = document.getElementById('projectSel');
   sel.replaceChildren(...state.projects.map(p => h('option', { value: p.id, selected: p.id === project()?.id }, p.name)));
+  const box = document.getElementById('me'), access = personById(accessPersonId);
+  if (box.contains(document.activeElement)) return;
+  box.replaceChildren(...(access ? [avatar(access), h('span', { title: access.email || '' }, access.name)]
+    : ['You are:', personSelect(() => me()?.id, id => { store.set('myPerson', id || ''); if (syncDialog) syncDialog(); }, 'Choose…')]));
 }
 
 // ---------- tabs + filters + board ----------
@@ -342,14 +464,17 @@ function render() {
   const tabs = document.getElementById('tabs'), filters = document.getElementById('filters'), board = document.getElementById('board');
   const p = project();
   if (!p) { tabs.replaceChildren(); filters.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
-  const orphans = showingOrphans(), mp = orphans ? null : currentMajor();
+  const orphans = showingOrphans(), archived = showingArchived(), mp = orphans || archived ? null : currentMajor();
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
     h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'),
-    orphanTabEl(p, orphans));
+    orphanTabEl(p, orphans),
+    h('div', { class: 'tab' + (archived ? ' active' : ''), title: 'Archived cards', onclick: () => { if (!archived) { setView(ARCHIVED); render(); } } },
+      h('span', { class: 'name' }, 'Archived'), h('span', { class: 'count' }, archivedOf(p).length)));
   renderFilters(p, filters);
 
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
+  if (archived) { board.replaceChildren(archivedPage(p)); return; }
   if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
   board.replaceChildren(...mp.stages.map(st => stageEl(p, mp, st)),
     h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: 'New stage' }); save(); render(); } }, '+ Add stage'));
@@ -380,7 +505,7 @@ function renderFilters(p, el) {
 }
 
 function tabEl(p, m, active) {
-  const n = p.tasks.filter(t => m.stages.some(s => s.id === t.stageId)).length;
+  const n = p.tasks.filter(t => !t.archived && m.stages.some(s => s.id === t.stageId)).length, prog = phaseProgress(p, m);
   const tab = h('div', { class: 'tab' + (active ? ' active' : ''), draggable: true, title: 'Drag to reorder',
     onclick: () => { if (!active) { setView(m.id); render(); } },
     ondragstart: e => { if (drag) return; drag = { kind: 'tab', id: m.id }; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'move'; },
@@ -412,6 +537,8 @@ function tabEl(p, m, active) {
           onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
       : h('span', { class: 'name' }, m.name),
     h('span', { class: 'count' }, n),
+    prog.all ? h('span', { class: 'tab-progress', title: `${prog.done} of ${prog.all} cards done` },
+      h('span', { class: 'bar' }, h('i', { style: `width:${prog.pct}%` })), `${prog.pct}%`) : null,
     active ? [
       h('button', { class: 'link', title: 'Move left', onclick: () => moveIn(p.majorPhases, m, -1) }, '‹'),
       h('button', { class: 'link', title: 'Move right', onclick: () => moveIn(p.majorPhases, m, 1) }, '›'),
@@ -469,7 +596,7 @@ function cardsRow(p, tasks, stageId, onStageDrop, ...head) {
 const countText = (shown, all) => (shown === all ? `${all}` : `${shown}/${all}`) + (all === 1 ? ' card' : ' cards');
 
 function stageEl(p, mp, st) {
-  const all = p.tasks.filter(t => t.stageId === st.id), shown = visible(p, all);
+  const all = p.tasks.filter(t => t.stageId === st.id && !t.archived), shown = visible(p, all);
   let row;
   const grip = h('span', { class: 'grip', draggable: true, title: 'Drag to reorder, or onto another tab to move it there',
     ondragstart: e => { drag = { kind: 'stage', id: st.id }; e.dataTransfer.setData('text/plain', st.name); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDragImage(row, 20, 20); } }, '⠿');
@@ -482,8 +609,22 @@ function stageEl(p, mp, st) {
       h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
       h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
       h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
-    h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task'));
+    h('label', { class: 'done-toggle', title: 'Cards here count as done towards this major phase’s progress' },
+      h('input', { type: 'checkbox', checked: !!st.done, onchange: e => { if (e.target.checked) st.done = true; else delete st.done; save(); render(); } }), 'Done stage'),
+    h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task'),
+    st.done && shown.length ? h('button', { class: 'add', title: 'Archive the cards showing in this stage', onclick: () => { shown.forEach(t => setArchived(t, true)); save(); render(); } }, `Archive all (${shown.length})`) : null);
+  row.classList.toggle('done-stage', !!st.done);
   return row;
+}
+
+function archivedPage(p) {
+  const all = archivedOf(p), shown = visible(p, all);
+  return h('div', { class: 'stage' },
+    h('div', { class: 'stage-head' },
+      h('strong', { style: 'padding:5px 8px' }, 'Archived'),
+      h('span', { class: 'count', style: 'padding:0 8px' }, countText(shown.length, all.length)),
+      h('p', { class: 'hint' }, 'Hidden from the board, and counted as done. Open a card to unarchive it back to its stage.')),
+    h('div', { class: 'cards' }, shown.map(t => cardEl(p, t))));
 }
 
 function orphanPage(p) {
@@ -497,7 +638,7 @@ function orphanPage(p) {
 function cardEl(p, t) {
   const cat = categoryOf(p, t), tags = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
   const done = t.steps.filter(x => x.done).length;
-  return h('div', { class: 'card', draggable: true, 'data-id': t.id, style: '--cat:' + cat.color,
+  return h('div', { class: 'card', draggable: !t.archived, 'data-id': t.id, style: '--cat:' + cat.color,
     ondragstart: e => { drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging'); },
     onclick: () => openTask(t) },
     h('div', { class: 'cat' }, h('span', { class: 'dot', style: '--c:' + cat.color }), cat.name),
@@ -508,6 +649,7 @@ function cardEl(p, t) {
       h('span', { class: 'badge prio ' + t.priority, title: 'Priority' }, 'P: ' + cap(t.priority)),
       t.size ? h('span', { class: 'badge', title: 'Size' }, 'S: ' + cap(t.size)) : null,
       t.attachments.length ? h('span', { title: 'Attachments' }, '📎 ' + t.attachments.length) : null,
+      t.comments.length ? h('span', { title: 'Comments' }, '💬 ' + t.comments.length) : null,
       t.steps.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${progress(t) * 100}%` })), h('span', {}, `${done}/${t.steps.length}`)] : null),
     t.orphanedFrom ? h('div', { class: 'from' }, 'From: ' + t.orphanedFrom) : null);
 }
@@ -532,10 +674,10 @@ function moveIn(a, x, d) {
   [a[i], a[j]] = [a[j], a[i]]; save(); render();
 }
 function addMajor() {
-  const m = { id: uid(), name: 'New phase', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
+  const m = { id: uid(), name: 'New phase', stages: defaultStages() };
   project().majorPhases.push(m); setView(m.id); save(); render();
 }
-// stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked (the server then deletes their files)
+// stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked (they then go to the bin with it)
 function delMajor(m) {
   const p = project(), ids = new Set(m.stages.map(s => s.id)), cards = p.tasks.filter(t => ids.has(t.stageId));
   confirmDelete(`major phase "${m.name}"`, `${m.stages.length} stage(s) and ${cards.length} card(s)`, cards.length, delCards => {
@@ -553,7 +695,7 @@ function delStage(mp, st) {
 function addTask(st) {
   const p = project();
   const t = { id: uid(), title: 'New task', description: '', stageId: st.id, categoryId: Model.defaultCategory(p).id,
-    priority: 'medium', tags: [], steps: [], attachments: [] };
+    priority: 'medium', tags: [], steps: [], attachments: [], comments: [] };
   p.tasks.push(t); save(); render(); openTask(t);
 }
 function newTag(p, name) {
@@ -578,7 +720,7 @@ const buttons = (...b) => h('div', { class: 'row', style: 'justify-content:flex-
 function confirmDelete(what, holds, nCards, onConfirm) {
   syncDialog = null;
   const box = h('input', { type: 'checkbox', onchange: () => { note.textContent = outcome(); } });
-  const outcome = () => box.checked ? `The ${nCards} card(s) will be permanently deleted, with their attachments.`
+  const outcome = () => box.checked ? `The ${nCards} card(s) will go to Recently deleted with it, for 30 days.`
     : `The ${nCards} card(s) will be moved to Orphaned cards.`;
   const note = h('p', { class: 'count' }, outcome());
   showDialog(
@@ -719,7 +861,54 @@ function openTask(t) {
   const from = h('p', { class: 'from' });
   const showFrom = () => { from.textContent = t.orphanedFrom ? 'Orphaned from: ' + t.orphanedFrom : ''; from.hidden = !t.orphanedFrom; };
 
-  drawSteps(); drawTags(); drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee();
+  // comments: anyone can read, and people edit or delete their own
+  const commentsBox = h('div', { class: 'list' });
+  let editingComment = null;
+  const authorOf = c => personById(c.authorId) || { id: c.authorId || 'unknown', name: c.authorName || 'Unknown' };
+  const drawComments = () => {
+    commentsBox.replaceChildren(...t.comments.map(c => {
+      const author = authorOf(c), mine = me()?.id === c.authorId, editing = editingComment === c.id;
+      const head = h('div', { class: 'comment-head' }, avatar(author), h('strong', {}, author.name),
+        h('span', { class: 'count' }, new Date(c.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + (c.editedAt ? ' (edited)' : '')),
+        mine && !editing ? h('span', { class: 'comment-tools' },
+          h('button', { class: 'link', onclick: () => { editingComment = c.id; drawComments(); } }, 'Edit'),
+          h('button', { class: 'link', onclick: () => { if (confirm('Delete this comment?')) { t.comments = t.comments.filter(x => x !== c); save(); drawComments(); } } }, 'Delete')) : null);
+      if (editing) {
+        const box = h('textarea', { rows: 3, value: c.text });
+        return h('div', { class: 'comment' }, head, box, buttons(
+          h('button', { onclick: () => { editingComment = null; drawComments(); } }, 'Cancel'),
+          h('button', { class: 'primary', onclick: () => {
+            const text = box.value.trim();
+            if (text && text !== c.text) { c.text = text; c.editedAt = new Date().toISOString(); save(); }
+            editingComment = null; drawComments(); } }, 'Save')));
+      }
+      const body = h('div', { class: 'md comment-body' });
+      body.innerHTML = Markdown.render(c.text);  // Markdown.render escapes all text: safe to insert
+      return h('div', { class: 'comment' }, head, body);
+    }));
+    commentCount.textContent = t.comments.length ? String(t.comments.length) : '';
+  };
+  const commentCount = h('span', { class: 'count' }), commentHint = h('p', { class: 'hint', style: 'padding:0' });
+  const post = () => {
+    const text = composer.value.trim(), who = me();
+    if (!text || !who) return;
+    t.comments.push({ id: uid(), authorId: who.id, authorName: who.name, text, at: new Date().toISOString() });
+    composer.value = ''; save(); drawComments();
+  };
+  const composer = h('textarea', { rows: 2, placeholder: 'Write a comment (Markdown supported). Ctrl+Enter to post.',
+    onkeydown: e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) post(); } });
+  const postBtn = h('button', { onclick: post }, 'Comment');
+  const showWho = () => {
+    const who = me();
+    postBtn.disabled = composer.disabled = !who;
+    commentHint.textContent = who ? '' : 'Choose who you are at the top of the page to comment.';
+    commentHint.hidden = !!who;
+  };
+
+  const archiveBtn = h('button', { onclick: () => { setArchived(t, !t.archived); save(); closeModal(); } });
+  const showArchive = () => { archiveBtn.textContent = t.archived ? 'Unarchive' : 'Archive'; };
+
+  drawSteps(); drawTags(); drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee(); drawComments(); showWho(); showArchive();
   showDialog(
     title,
     h('div', { class: 'row' },
@@ -738,9 +927,13 @@ function openTask(t) {
       fileList, uploadStatus, picker,
       h('p', { class: 'hint', style: 'padding:0' }, 'Or drop files onto this dialog.')),
     h('div', {}, h('label', {}, 'Steps'), stepsBox, newStep),
+    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Comments'), commentCount), commentsBox, composer, commentHint,
+      h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:4px' }, postBtn)),
     h('div', { class: 'row', style: 'justify-content:space-between' },
-      h('button', { onclick: () => { if (confirm('Delete this task and its attachments?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
-      h('button', { class: 'primary', onclick: closeModal }, 'Done')));
+      h('div', { class: 'row', style: 'flex:none' },
+        h('button', { onclick: () => { if (confirm('Delete this task? It stays in Recently deleted for 30 days.')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
+        archiveBtn),
+      h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done')));
   // drop handlers live on the whole dialog while it shows this task
   Object.entries(fileDrop).forEach(([k, f]) => { dialog[k] = f; });
 
@@ -748,7 +941,7 @@ function openTask(t) {
   syncDialog = () => {
     if (!state.projects.includes(p) || !p.tasks.includes(t)) {
       syncDialog = null;
-      showDialog(h('h2', {}, 'This card was deleted'), h('p', {}, `Someone else deleted "${t.title}".`),
+      showDialog(h('h2', {}, 'This card was deleted'), h('p', {}, `"${t.title}" is in Recently deleted for 30 days.`),
         buttons(h('button', { class: 'primary', onclick: closeModal }, 'Close')));
       return;
     }
@@ -762,8 +955,44 @@ function openTask(t) {
     if (a !== tagInput) drawTags();
     if (!stepsBox.contains(a)) drawSteps();
     assignee.refresh();
-    drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee();
+    if (!commentsBox.contains(a)) drawComments();
+    drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee(); showWho(); showArchive();
   };
+}
+
+// ---------- recently deleted bin ----------
+function openBin() {
+  const kinds = { task: 'Card', stage: 'Stage', major: 'Major phase', project: 'Project', attachment: 'Attachment' };
+  const status = h('p', { class: 'count' });
+  const act = async (url, method) => {
+    const r = await fetch(url, { method }).catch(() => null);
+    if (!r) { status.textContent = 'Couldn’t reach the server.'; return; }
+    if (!r.ok) { status.textContent = await r.text(); return; }
+    status.textContent = '';
+    receive(await r.json());
+  };
+  const draw = async () => {
+    const list = await fetch('/api/trash').then(r => r.json()).catch(() => null);
+    if (syncDialog !== draw) return;  // closed, or replaced by another dialog, while waiting
+    const p = project();
+    const shown = (list || []).filter(e => e.kind === 'project' || e.projectId === p?.id);
+    showDialog(
+      h('h2', {}, 'Recently deleted'),
+      h('p', { class: 'hint', style: 'padding:0' }, `Deleted cards, stages and major phases in ${p ? `"${p.name}"` : 'this project'}, and deleted projects. Each stays here until the date shown, then it and its attachments are gone for good.`),
+      list === null ? h('p', { class: 'count' }, 'Couldn’t load the bin.') :
+      shown.length ? h('div', { class: 'list' }, shown.map(e => h('div', { class: 'item bin-item', 'data-id': e.id },
+        h('div', { class: 'bin-text' },
+          h('div', {}, h('strong', {}, e.name), ` (${kinds[e.kind]})`),
+          h('div', { class: 'count' }, [e.from && `from ${e.from}`, e.cards && `${e.cards} card(s)`,
+            `deleted ${new Date(e.deletedAt).toLocaleDateString()}`, `kept until ${new Date(e.expiresAt).toLocaleDateString()}`].filter(Boolean).join(' · '))),
+        h('button', { onclick: () => act(`/api/trash/${e.id}/restore`, 'POST') }, 'Restore'),
+        h('button', { class: 'link', onclick: () => { if (confirm(`Permanently delete "${e.name}"? This can’t be undone.`)) act(`/api/trash/${e.id}`, 'DELETE'); } }, 'Delete forever')))) :
+      h('p', { class: 'count' }, 'Nothing here.'),
+      status,
+      buttons(h('button', { class: 'primary', onclick: closeModal }, 'Done')));
+  };
+  syncDialog = draw;
+  draw();
 }
 // ---------- categories & tags editor ----------
 function openLabels() {
@@ -867,7 +1096,7 @@ document.getElementById('newProject').onclick = () => {
   if (!state) return;
   const name = prompt('Project name?'); if (!name) return;
   const p = { id: uid(), name, tasks: [], tags: [], categories: Model.newCategories(uid),
-    majorPhases: [{ id: uid(), name: 'Phase 1', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) }] };
+    majorPhases: [{ id: uid(), name: 'Phase 1', stages: defaultStages() }] };
   state.projects.push(p); currentId = p.id; store.set('currentProject', currentId); save(); render();
 };
 document.getElementById('renameProject').onclick = () => {
@@ -876,9 +1105,11 @@ document.getElementById('renameProject').onclick = () => {
 };
 document.getElementById('labels').onclick = () => { if (state) openLabels(); };
 document.getElementById('people').onclick = () => { if (state) openPeople(); };
+document.getElementById('bin').onclick = () => { if (state) openBin(); };
+document.getElementById('undo').onclick = () => { if (state) undo(); };
 document.getElementById('delProject').onclick = () => {
   const cur = state && project(); if (!cur) return;
-  if (!confirm(`Delete project "${cur.name}" and all its tasks?`)) return;
+  if (!confirm(`Delete project "${cur.name}"? It stays in Recently deleted for 30 days.`)) return;
   state.projects = state.projects.filter(p => p !== cur); currentId = state.projects[0]?.id; save(); render();
 };
 

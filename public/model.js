@@ -42,6 +42,7 @@
       fix('size' in t && !SIZES.includes(t.size), () => { delete t.size; });
       fix(!Array.isArray(t.attachments), () => { t.attachments = []; });
       fix(!Array.isArray(t.steps), () => { t.steps = []; });
+      fix(!Array.isArray(t.comments), () => { t.comments = []; });
       // an assignee who was deleted (perhaps at the same moment) leaves the card or step unassigned
       for (const x of [t, ...t.steps]) fix('assigneeId' in x && !personIds.has(x.assigneeId), () => { delete x.assigneeId; });
     }

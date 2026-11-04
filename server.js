@@ -21,6 +21,7 @@ const MAX_UPLOAD = (Number(process.env.MAX_UPLOAD_MB) || 25) * 1024 * 1024;
 const BACKUPS = path.join(__dirname, 'backups');
 const BACKUP_EVERY = (Number(process.env.BACKUP_INTERVAL_HOURS) || 12) * 3600e3;
 const BACKUP_KEEP = (Number(process.env.BACKUP_KEEP_DAYS) || 14) * 86400e3;
+const TRASH_KEEP = (Number(process.env.TRASH_KEEP_DAYS) || 30) * 86400e3;
 const uid = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 
 const seed = () => ({
@@ -39,12 +40,12 @@ const seed = () => ({
       { id: 'mp1', name: 'Design', stages: [
         { id: 'st1', name: 'Planning' },
         { id: 'st2', name: 'In review' },
-        { id: 'st3', name: 'Approved' },
+        { id: 'st3', name: 'Approved', done: true },
       ] },
       { id: 'mp2', name: 'Build', stages: [
         { id: 'st4', name: 'To do' },
         { id: 'st5', name: 'In progress' },
-        { id: 'st6', name: 'Done' },
+        { id: 'st6', name: 'Done', done: true },
       ] },
     ],
     tasks: [{
@@ -85,20 +86,29 @@ function migrate(s) {
     s.upgrades.push('categories:planning+other');
     changed = true;
   }
+  // existing stages called "Done" become done stages
+  if (!s.upgrades.includes('stages:done')) {
+    for (const p of s.projects) for (const m of p.majorPhases) for (const st of m.stages) if (/^(done|completed?)$/i.test(st.name.trim())) st.done = true;
+    s.upgrades.push('stages:done');
+    changed = true;
+  }
   return changed;
 }
 
 // ---------- persistence: debounced, atomic (temp file + rename) ----------
-let state, writeTimer = null;
+// the bin is stored in data.json, so backups include it, but it isn't part of the board sent to browsers
+let state, trash = [], writeTimer = null;
 function writeNow() {
   clearTimeout(writeTimer); writeTimer = null;
-  fs.writeFileSync(DATA + '.tmp', JSON.stringify(state, null, 2));
+  fs.writeFileSync(DATA + '.tmp', JSON.stringify({ ...state, trash }, null, 2));
   fs.renameSync(DATA + '.tmp', DATA);
 }
 const persist = () => { if (!writeTimer) writeTimer = setTimeout(writeNow, 200); };
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { if (writeTimer) writeNow(); process.exit(0); });
 
 try { state = JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch { state = seed(); }
+trash = Array.isArray(state.trash) ? state.trash : [];
+delete state.trash;
 if (migrate(state) && fs.existsSync(DATA)) {
   // keep the file as it was before this version upgraded it (not pruned with the regular backups)
   fs.mkdirSync(BACKUPS, { recursive: true });
@@ -110,7 +120,10 @@ let version = Date.now();
 
 // ---------- attachments: uploads/<id> holds the bytes, uploads/<id>.json its name and type ----------
 fs.mkdirSync(UPLOADS, { recursive: true });
-const attachmentIds = () => new Set(state.projects.flatMap(p => p.tasks.flatMap(t => t.attachments.map(a => a.id))));
+// a file stays on disk while the board or the bin refers to it
+const taskFiles = tasks => (tasks || []).flatMap(t => (t.attachments || []).map(a => a.id));
+const entryFiles = e => e.kind === 'attachment' ? [e.item.id] : e.kind === 'task' ? taskFiles([e.item]) : e.kind === 'project' ? taskFiles(e.item.tasks) : taskFiles(e.tasks);
+const attachmentIds = () => new Set([...state.projects.flatMap(p => taskFiles(p.tasks)), ...trash.flatMap(entryFiles)]);
 function removeFiles(ids) {
   for (const id of ids) for (const f of [id, id + '.json']) fs.rm(path.join(UPLOADS, f), { force: true }, () => {});
 }
@@ -155,6 +168,132 @@ function download(id, res) {
   fs.createReadStream(path.join(UPLOADS, id)).on('error', () => res.end()).pipe(res);
 }
 
+// ---------- recently deleted bin ----------
+// Deletions are detected by comparing the board before and after each batch of ops, whatever caused them.
+// One entry per thing deleted: a stage or major phase entry carries the cards deleted with it.
+function captureDeletions(before, after) {
+  const add = e => trash.unshift({ id: uid(), deletedAt: new Date().toISOString(), ...e });
+  for (const pb of before.projects) {
+    const pa = after.projects.find(p => p.id === pb.id);
+    if (!pa) { add({ kind: 'project', name: pb.name, projectName: pb.name, projectId: pb.id, item: pb }); continue; }
+    const base = { projectId: pb.id, projectName: pb.name };
+    const tasksAfter = new Map(pa.tasks.map(t => [t.id, t]));
+    const stagesAfter = new Set(pa.majorPhases.flatMap(m => m.stages.map(s => s.id)));
+    const majorsAfter = new Set(pa.majorPhases.map(m => m.id));
+    let removed = pb.tasks.filter(t => !tasksAfter.has(t.id));
+    const tagDefs = ts => pb.tags.filter(g => ts.some(t => t.tags.includes(g.id)));
+    // cards deleted with these stages, and cards orphaned by deleting them (so a restore can put them back)
+    const claim = ids => {
+      const tasks = removed.filter(t => ids.has(t.stageId));
+      removed = removed.filter(t => !ids.has(t.stageId));
+      const orphaned = pb.tasks.filter(t => ids.has(t.stageId) && tasksAfter.has(t.id)).map(t => ({ id: t.id, stageId: t.stageId }));
+      return { tasks, orphaned, tagDefs: tagDefs(tasks) };
+    };
+    pb.majorPhases.forEach((m, index) => {
+      // stages dragged to another tab are still on the board, so they aren't part of a deleted tab
+      const gone = m.stages.filter(s => !stagesAfter.has(s.id));
+      if (!majorsAfter.has(m.id)) {
+        add({ ...base, kind: 'major', name: m.name, index, item: { ...m, stages: gone }, ...claim(new Set(gone.map(s => s.id))) });
+      } else gone.forEach(st => {
+        add({ ...base, kind: 'stage', name: st.name, from: m.name, majorId: m.id, index: m.stages.indexOf(st), item: st, ...claim(new Set([st.id])) });
+      });
+    });
+    for (const t of removed) {
+      const m = pb.majorPhases.find(m => m.stages.some(s => s.id === t.stageId));
+      const from = m ? `${m.name} › ${m.stages.find(s => s.id === t.stageId).name}` : t.orphanedFrom;
+      add({ ...base, kind: 'task', name: t.title, from, index: pb.tasks.indexOf(t), item: t, tagDefs: tagDefs([t]) });
+    }
+    for (const tb of pb.tasks) {
+      const ta = tasksAfter.get(tb.id);
+      if (ta) for (const a of tb.attachments) if (!ta.attachments.some(x => x.id === a.id)) add({ ...base, kind: 'attachment', name: a.name, from: tb.title, taskId: tb.id, item: a });
+    }
+  }
+}
+// an entry whose item is back on the board (e.g. someone used Undo) has nothing left to restore
+function reconcileTrash() {
+  const onBoard = e => {
+    const p = state.projects.find(p => p.id === e.projectId);
+    if (!p) return false;
+    if (e.kind === 'project') return true;
+    if (e.kind === 'task') return p.tasks.some(t => t.id === e.item.id);
+    if (e.kind === 'attachment') return p.tasks.some(t => t.attachments.some(a => a.id === e.item.id));
+    if (e.kind === 'major') return p.majorPhases.some(m => m.id === e.item.id);
+    return p.majorPhases.some(m => m.stages.some(s => s.id === e.item.id));
+  };
+  trash = trash.filter(e => !onBoard(e));
+}
+class RestoreError extends Error {}
+function takeEntry(id) {
+  const i = trash.findIndex(e => e.id === id);
+  if (i < 0) throw new RestoreError('That item is no longer in the bin.');
+  return trash.splice(i, 1)[0];
+}
+// the project an entry belongs to, restoring the project too if it was deleted
+function projectFor(e) {
+  if (!state.projects.some(x => x.id === e.projectId)) {
+    const parent = trash.find(x => x.kind === 'project' && x.item.id === e.projectId);
+    if (!parent) { trash.unshift(e); throw new RestoreError(`Its project "${e.projectName}" has been permanently deleted.`); }
+    restoreEntry(parent.id);
+  }
+  return state.projects.find(x => x.id === e.projectId);
+}
+const stageIds = p => new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
+function addBack(p, e) {
+  for (const g of e.tagDefs || []) if (!p.tags.some(x => x.id === g.id)) p.tags.push(g);
+  for (const t of e.tasks || []) if (!p.tasks.some(x => x.id === t.id)) p.tasks.push(t);
+  // cards that the deletion orphaned go home, unless they've since been given another stage
+  const stages = stageIds(p);
+  for (const o of e.orphaned || []) {
+    const t = p.tasks.find(x => x.id === o.id);
+    if (t && !stages.has(t.stageId) && stages.has(o.stageId)) { t.stageId = o.stageId; delete t.orphanedFrom; }
+  }
+}
+function restoreEntry(id) {
+  const e = takeEntry(id);
+  if (e.kind === 'project') { if (!state.projects.some(p => p.id === e.item.id)) state.projects.push(e.item); return; }
+  const p = projectFor(e);
+  const insertAt = (a, i, x) => a.splice(Math.min(i, a.length), 0, x);
+  if (e.kind === 'task') {
+    addBack(p, e);
+    // its stage has gone too: back to Orphaned cards, still labelled with where it came from
+    if (!stageIds(p).has(e.item.stageId)) { e.item.stageId = null; e.item.orphanedFrom = e.from; }
+    if (!p.tasks.some(t => t.id === e.item.id)) insertAt(p.tasks, e.index ?? p.tasks.length, e.item);
+  } else if (e.kind === 'major') {
+    if (!p.majorPhases.some(m => m.id === e.item.id)) insertAt(p.majorPhases, e.index, e.item);
+    addBack(p, e);
+  } else if (e.kind === 'stage') {
+    let m = p.majorPhases.find(x => x.id === e.majorId);
+    if (!m) {
+      const parent = trash.find(x => x.kind === 'major' && x.item.id === e.majorId);
+      if (parent) { restoreEntry(parent.id); m = p.majorPhases.find(x => x.id === e.majorId); }
+    }
+    if (!m) { m = p.majorPhases[0]; if (!m) { m = { id: uid(), name: 'Restored', stages: [] }; p.majorPhases.push(m); } }
+    if (!m.stages.some(s => s.id === e.item.id)) insertAt(m.stages, e.index, e.item);
+    addBack(p, e);
+  } else if (e.kind === 'attachment') {
+    let t = p.tasks.find(x => x.id === e.taskId);
+    if (!t) {
+      // the card was deleted after the attachment: bring the card back as well
+      const parent = trash.find(x => x.projectId === e.projectId && (x.kind === 'task' ? x.item.id === e.taskId : (x.tasks || []).some(y => y.id === e.taskId)));
+      if (!parent) { trash.unshift(e); throw new RestoreError(`Its card "${e.from}" has been permanently deleted.`); }
+      restoreEntry(parent.id);
+      t = p.tasks.find(x => x.id === e.taskId);
+    }
+    if (t && !t.attachments.some(a => a.id === e.item.id)) t.attachments.push(e.item);
+  }
+}
+const trashList = () => trash.map(e => ({ id: e.id, kind: e.kind, name: e.name, from: e.from, projectId: e.projectId, projectName: e.projectName,
+  deletedAt: e.deletedAt, expiresAt: new Date(Date.parse(e.deletedAt) + TRASH_KEEP).toISOString(),
+  cards: e.kind === 'project' ? e.item.tasks.length : (e.tasks || []).length }));
+function purgeTrash() {
+  const had = attachmentIds(), n = trash.length;
+  trash = trash.filter(e => Date.now() - Date.parse(e.deletedAt) <= TRASH_KEEP);
+  if (trash.length === n) return;
+  const has = attachmentIds();
+  removeFiles([...had].filter(id => !has.has(id)));
+  changedByServer();
+}
+
 // ---------- backups: backups/data-YYYYMMDD-HHMMSS.json (UTC) every 12h, kept 14 days ----------
 const backupTime = f => {
   const m = f.match(/^data-(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)\.json$/);
@@ -180,12 +319,10 @@ function backupTick() {
     }
   } catch (err) { console.error('Backup failed:', err.message); }
 }
-backupTick();
-setInterval(backupTick, Math.min(BACKUP_EVERY, 3600e3));
 
 // ---------- live clients ----------
 const clients = new Set();
-const snapshot = () => JSON.stringify({ version, state });
+const snapshot = () => JSON.stringify({ version, state, trashCount: trash.length });
 function broadcast() {
   const msg = `data: ${snapshot()}\n\n`;
   for (const res of clients) res.write(msg);
@@ -193,10 +330,45 @@ function broadcast() {
 // comment lines keep idle connections open through proxies such as Cloudflare Tunnel
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25000).unref();
 
+// a change made by the server itself: save it and tell every browser
+function changedByServer() {
+  Model.normalizeState(state, uid);
+  version = Math.max(Date.now(), version + 1);
+  persist();
+  broadcast();
+}
+
+// runs after the definitions above, since purging the bin tells browsers
+function housekeeping() {
+  try { purgeTrash(); } catch (err) { console.error('Bin purge failed:', err.message); }
+  backupTick();
+}
+housekeeping();
+setInterval(housekeeping, Math.min(BACKUP_EVERY, 3600e3));
+
 function readBody(req, cb) {
   let body = '', size = 0;
   req.on('data', c => { size += c.length; if (size > MAX_BODY) req.destroy(); else body += c; });
   req.on('end', () => cb(body));
+}
+
+// who is asking, per Cloudflare Access (no header means no Access in front of this request): the matching People
+// entry, created on first sight. An existing person named like the email's first part is linked to it.
+function me(req, res) {
+  const email = String(req.headers['cf-access-authenticated-user-email'] || '').trim().toLowerCase();
+  let person = null;
+  if (email) {
+    person = state.people.find(x => (x.email || '').toLowerCase() === email);
+    if (!person) {
+      const local = email.split('@')[0] || email;
+      person = state.people.find(x => !x.email && x.name.trim().toLowerCase() === local);
+      if (person) person.email = email;
+      else { person = { id: uid(), name: local[0].toUpperCase() + local.slice(1), email }; state.people.push(person); }
+      changedByServer();
+    }
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify({ personId: person ? person.id : null }));
 }
 
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
@@ -223,9 +395,12 @@ const server = http.createServer((req, res) => {
         const before = Sync.clone(state), hadFiles = attachmentIds();
         try {
           Sync.apply(state, ops);
+          delete state.trash;  // the bin isn't part of the synced board
           Model.normalizeState(state, uid);
+          captureDeletions(before, state);
+          reconcileTrash();
         } catch { state = before; res.writeHead(400); return res.end('invalid ops'); }
-        // files of attachments that were removed, or whose card was deleted
+        // deleted things wait in the bin, so this only removes files nothing refers to at all
         const hasFiles = attachmentIds();
         removeFiles([...hadFiles].filter(id => !hasFiles.has(id)));
         version = Math.max(Date.now(), version + 1);
@@ -235,6 +410,27 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(snapshot());
     });
+  }
+  if (url === '/api/me' && req.method === 'GET') return me(req, res);
+  if (url === '/api/trash' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(trashList()));
+  }
+  const trashMatch = url.match(/^\/api\/trash\/([\w-]+)(\/restore)?$/);
+  if (trashMatch && (trashMatch[2] ? req.method === 'POST' : req.method === 'DELETE')) {
+    const had = attachmentIds(), before = Sync.clone(trash);
+    try {
+      if (trashMatch[2]) restoreEntry(trashMatch[1]); else takeEntry(trashMatch[1]);
+    } catch (err) {
+      if (!(err instanceof RestoreError)) throw err;
+      trash = before;
+      res.writeHead(409); return res.end(err.message);
+    }
+    const has = attachmentIds();
+    removeFiles([...had].filter(id => !has.has(id)));
+    changedByServer();
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(snapshot());
   }
   if (url === '/api/files' && req.method === 'POST') return upload(req, res);
   if (url.startsWith('/api/')) { res.writeHead(405); return res.end(); }
