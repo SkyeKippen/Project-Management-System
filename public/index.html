@@ -5,20 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phase Board</title>
 <style>
-  :root { --bg:#f4f5f7; --panel:#ebecf0; --card:#fff; --text:#172b4d; --muted:#6b778c; --accent:#0c66e4; --ok:#1f845a; --line:#dfe1e6; }
+  :root { --bg:#f4f5f7; --panel:#ebecf0; --card:#fff; --text:#172b4d; --muted:#6b778c; --accent:#0c66e4; --ok:#1f845a; --line:#dfe1e6; --danger:#c9372c; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#1d2125; --panel:#161a1d; --card:#22272b; --text:#c7d1db; --muted:#8c9bab; --accent:#579dff; --ok:#4bce97; --line:#38414a; }
+    :root { --bg:#1d2125; --panel:#161a1d; --card:#22272b; --text:#c7d1db; --muted:#8c9bab; --accent:#579dff; --ok:#4bce97; --line:#38414a; --danger:#f87168; }
   }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
-  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0 12px 0 0; }
   button, select, input, textarea { font:inherit; color:inherit; }
   button { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 10px; cursor:pointer; }
   button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   button.link { border:0; background:none; color:var(--muted); padding:2px 6px; }
+  button.danger { background:var(--danger); border-color:var(--danger); color:#fff; }
   input, select, textarea { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:5px 8px; }
+  input[type=color] { width:32px; height:28px; padding:2px; flex:none; }
+  #status { margin-left:auto; font-size:12px; }
+  #status.live { color:var(--ok); }
+  #status.offline { color:var(--muted); }
   /* major phase tabs */
   #tabs { display:flex; gap:4px; padding:8px 16px 0; border-bottom:1px solid var(--line); overflow-x:auto; overflow-y:hidden; flex:none; }
   .tab { display:flex; align-items:center; gap:2px; padding:4px 8px; border:1px solid transparent; border-bottom:0; border-radius:6px 6px 0 0; margin-bottom:-1px; color:var(--muted); cursor:pointer; white-space:nowrap; }
@@ -29,53 +35,94 @@
   .tab input { font-weight:600; background:transparent; border-color:transparent; padding:2px 4px; }
   .tab input:focus { background:var(--card); border-color:var(--line); }
   .addtab { align-self:center; margin-left:4px; }
+  .tab.orphans { margin-left:auto; }
+  .tab.orphans .count { background:var(--line); border-radius:8px; padding:0 6px; }
+  .tab.orphans.has .count { background:var(--danger); color:#fff; }
+  /* drop markers for reordering tabs and stages */
+  .drop-before { box-shadow:inset 3px 0 0 var(--accent); }
+  .drop-after { box-shadow:inset -3px 0 0 var(--accent); }
+  .stage.drop-before { box-shadow:0 -3px 0 var(--accent); }
+  .stage.drop-after { box-shadow:0 3px 0 var(--accent); }
+  /* tag filter bar */
+  #filters { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:8px 16px 0; flex:none; }
+  #filters:empty { display:none; }
+  #filters .label { color:var(--muted); font-size:12px; }
   /* stages: vertical rows, cards flow left to right */
   #board { flex:1; display:flex; flex-direction:column; gap:10px; padding:16px; overflow-y:auto; }
   .stage { display:flex; background:var(--panel); border-radius:6px; flex:none; }
   .stage.over { outline:2px dashed var(--accent); }
   .stage-head { width:190px; flex:none; display:flex; flex-direction:column; gap:2px; padding:8px; border-right:1px solid var(--line); }
-  .stage-head input { font-weight:600; background:transparent; border-color:transparent; width:100%; }
+  .stage-head .name-row { display:flex; align-items:center; }
+  .stage-head input { font-weight:600; background:transparent; border-color:transparent; width:100%; min-width:0; }
   .stage-head input:focus { background:var(--card); border-color:var(--line); }
+  .grip { cursor:grab; color:var(--muted); padding:0 4px; user-select:none; }
   .tools { display:flex; align-items:center; padding-left:8px; }
   .tools .count { margin-right:auto; }
   .count { color:var(--muted); font-size:12px; }
   .cards { flex:1; display:flex; flex-wrap:wrap; align-content:flex-start; gap:8px; padding:8px; min-height:64px; }
-  .card { width:210px; flex:none; background:var(--card); border-radius:4px; padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; }
+  .card { width:220px; flex:none; background:var(--card); border-radius:4px; border-left:4px solid var(--cat, var(--line)); padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; display:flex; flex-direction:column; gap:5px; }
   .card.dragging { opacity:.4; }
-  .card .title { font-weight:500; }
-  .meta { display:flex; gap:6px; margin-top:6px; align-items:center; color:var(--muted); font-size:12px; }
-  .prio { padding:0 6px; border-radius:8px; border:1px solid var(--line); }
-  .prio.high { color:#c9372c; border-color:#c9372c; }
+  .card .title { font-weight:500; overflow-wrap:anywhere; }
+  .cat { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--c); flex:none; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; }
+  .chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:0 7px; border-radius:9px; border:1px solid var(--c, var(--line));
+          background:color-mix(in srgb, var(--c, transparent) 16%, transparent); color:var(--text); white-space:nowrap; line-height:18px; }
+  button.chip { cursor:pointer; padding:1px 8px; }
+  button.chip.off { background:transparent; opacity:.7; }
+  button.chip.on { background:color-mix(in srgb, var(--c) 45%, transparent); font-weight:600; opacity:1; }
+  .meta { display:flex; gap:6px; align-items:center; color:var(--muted); font-size:12px; flex-wrap:wrap; }
+  .badge { padding:0 6px; border-radius:8px; border:1px solid var(--line); font-size:11px; line-height:17px; }
+  .prio.urgent { background:var(--danger); border-color:var(--danger); color:#fff; font-weight:600; }
+  .prio.high { color:var(--danger); border-color:var(--danger); }
   .prio.low { color:var(--ok); border-color:var(--ok); }
-  .bar { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .bar { flex:1; min-width:40px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--ok); }
   .add { text-align:left; background:transparent; border-color:transparent; color:var(--muted); }
   .newstage { align-self:flex-start; flex:none; }
+  .from { color:var(--muted); font-size:12px; }
+  .hint { color:var(--muted); font-size:12px; padding:0 4px; margin:0; }
   /* modal */
-  #modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding-top:6vh; }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding-top:5vh; }
   #modal.open { display:flex; }
-  .dialog { background:var(--bg); border-radius:8px; width:min(560px, 94vw); max-height:88vh; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .dialog { background:var(--bg); border-radius:8px; width:min(600px, 94vw); max-height:90vh; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .dialog.files-over { outline:2px dashed var(--accent); }
   .dialog label { font-size:12px; color:var(--muted); display:block; margin-bottom:2px; }
   .dialog input, .dialog textarea, .dialog select { width:100%; }
-  .row { display:flex; gap:8px; }
-  .row > div { flex:1; }
-  #status { margin-left:auto; font-size:12px; }
-  #status.live { color:var(--ok); }
-  #status.offline { color:var(--muted); }
   .dialog input[type=checkbox] { width:auto; }
+  .dialog input[type=color] { width:32px; }
   .dialog h2 { font-size:16px; margin:0; }
+  .dialog h3 { font-size:14px; margin:6px 0 0; }
   .dialog p { margin:0; }
   .dialog .check { display:flex; align-items:center; gap:6px; font-size:14px; color:var(--text); cursor:pointer; }
-  button.danger { background:#c9372c; border-color:#c9372c; color:#fff; }
-  .step { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
-  .step input[type=text] { flex:1; border:0; background:transparent; }
+  .row { display:flex; gap:8px; align-items:flex-end; }
+  .row > div { flex:1; min-width:0; }
+  .field-head { display:flex; align-items:center; justify-content:space-between; }
+  .field-head label { margin:0; }
+  .step, .item { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
+  .step input[type=text], .item input[type=text] { flex:1; border:0; background:transparent; }
   .step.done input[type=text] { text-decoration:line-through; color:var(--muted); }
-  /* orphaned cards */
-  .tab.orphans { margin-left:auto; }
-  .tab.orphans .count { background:var(--line); border-radius:8px; padding:0 6px; }
-  .tab.orphans.has .count { background:#c9372c; color:#fff; }
-  .from { color:var(--muted); font-size:12px; margin-top:4px; }
-  .hint { color:var(--muted); font-size:12px; padding:0 4px; }
+  .list { display:flex; flex-direction:column; gap:4px; }
+  .tag-edit { display:flex; flex-wrap:wrap; gap:4px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px; }
+  .tag-edit input { flex:1; min-width:120px; border:0; width:auto; }
+  .chip button { border:0; background:none; padding:0; color:var(--muted); cursor:pointer; }
+  /* markdown */
+  .md { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:6px 10px; min-height:40px; overflow-wrap:anywhere; }
+  .md:empty::before { content:'No description'; color:var(--muted); }
+  .md > :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
+  .md p, .md ul, .md ol, .md pre, .md blockquote { margin:6px 0; }
+  .md h3, .md h4, .md h5, .md h6 { margin:8px 0 4px; }
+  .md code { background:var(--panel); padding:0 4px; border-radius:3px; font-size:13px; }
+  .md pre { background:var(--panel); padding:8px; border-radius:4px; overflow:auto; }
+  .md pre code { padding:0; background:none; }
+  .md blockquote { border-left:3px solid var(--line); padding-left:10px; color:var(--muted); }
+  .md li.task { list-style:none; margin-left:-1.2em; }
+  .md a { color:var(--accent); }
+  /* attachments */
+  .file { display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
+  .file a { color:var(--accent); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file img { width:36px; height:36px; object-fit:cover; border-radius:3px; }
+  .file .count { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -84,23 +131,34 @@
   <select id="projectSel"></select>
   <button id="newProject">+ Project</button>
   <button id="renameProject">Rename</button>
+  <button id="labels">Categories &amp; tags</button>
   <button id="delProject" class="link">Delete project</button>
   <span id="status" class="offline">● Connecting…</span>
 </header>
 <nav id="tabs"></nav>
+<div id="filters"></div>
 <div id="board"></div>
 
 <div id="modal"><div class="dialog" id="dialog"></div></div>
 
 <script src="sync.js"></script>
+<script src="model.js"></script>
+<script src="markdown.js"></script>
 <script>
 // Data shape: project { majorPhases: [{ id, name, stages: [{ id, name }] }],
-//                       tasks: [{ id, stageId, steps: [{ id, name, done }], orphanedFrom?, ... }] }
-// A task whose stageId matches no stage (null after a delete) is an orphan.
+//                       categories: [{ id, name, color }], tags: [{ id, name, color }],
+//                       tasks: [{ id, stageId, categoryId, tags: [tagId], priority, size?, description,
+//                                 steps: [{ id, name, done }], attachments: [{ id, name, size, type }], orphanedFrom? }] }
+// A task whose stageId matches no stage (null after a delete) is an orphan. The server enforces the rules in model.js.
 // ids are generated by every client, so make collisions between users vanishingly unlikely
 const uid = () => (Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8));
+// per-viewer preferences; storage can be unavailable (private windows, blocked site data)
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
 let state = null;
-let currentId = localStorage.getItem('currentProject');
+let currentId = store.get('currentProject');
 
 // ---------- live sync ----------
 // `base` is the last state the server confirmed; `state` is base plus this user's edits not yet confirmed.
@@ -144,7 +202,7 @@ function setStatus(live) {
 let needRender = false;
 function renderSoon() {
   const a = document.activeElement;
-  if (dragId || (a && a.matches('input') && a.closest('#board, #tabs'))) { needRender = true; return; }
+  if (drag || (a && a.matches('input') && a.closest('#board, #tabs'))) { needRender = true; return; }
   needRender = false; render();
 }
 document.addEventListener('focusout', () => { if (needRender) setTimeout(renderSoon); });
@@ -155,16 +213,32 @@ const orphansOf = p => {
   const ids = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
   return p.tasks.filter(t => !ids.has(t.stageId));
 };
+const categoryOf = (p, t) => p.categories.find(c => c.id === t.categoryId) || Model.defaultCategory(p);
+const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+const cap = s => s[0].toUpperCase() + s.slice(1);
 
 // selected view per project: a major phase id, or ORPHANS for the orphaned cards page
 const ORPHANS = 'orphans';
 const viewKey = p => 'currentMajor:' + p.id;
-const showingOrphans = () => localStorage.getItem(viewKey(project())) === ORPHANS;
+const showingOrphans = () => store.get(viewKey(project())) === ORPHANS;
 const currentMajor = () => {
-  const p = project(), id = localStorage.getItem(viewKey(p));
+  const p = project(), id = store.get(viewKey(p));
   return p.majorPhases.find(m => m.id === id) || p.majorPhases[0];
 };
-const setView = id => localStorage.setItem(viewKey(project()), id);
+const setView = id => store.set(viewKey(project()), id);
+
+// tag filter, per viewer and project: cards with ANY selected tag are shown; nothing selected shows everything
+const filterKey = p => 'tagFilter:' + p.id;
+const activeFilter = p => {
+  let ids = [];
+  try { ids = JSON.parse(store.get(filterKey(p)) || '[]'); } catch {}
+  return Array.isArray(ids) ? ids.filter(id => p.tags.some(t => t.id === id)) : [];
+};
+const setFilter = (p, ids) => store.set(filterKey(p), JSON.stringify(ids));
+const visible = (p, tasks) => {
+  const f = activeFilter(p);
+  return f.length ? tasks.filter(t => t.tags.some(id => f.includes(id))) : tasks;
+};
 
 // ---------- tiny DOM helper ----------
 function h(tag, props = {}, ...kids) {
@@ -180,6 +254,8 @@ function h(tag, props = {}, ...kids) {
 }
 
 const progress = t => t.steps.length ? t.steps.filter(s => s.done).length / t.steps.length : 0;
+const fmtSize = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+const tagChip = (tag, ...extra) => h('span', { class: 'chip', style: '--c:' + tag.color }, tag.name, ...extra);
 
 // ---------- header ----------
 function renderHeader() {
@@ -187,18 +263,39 @@ function renderHeader() {
   sel.replaceChildren(...state.projects.map(p => h('option', { value: p.id, selected: p.id === project()?.id }, p.name)));
 }
 
-// ---------- tabs + board ----------
-let dragId = null;
+// ---------- tabs + filters + board ----------
+// what is being dragged: a card, a major phase tab or a stage row
+let drag = null;
+function endDrag() {
+  drag = null;
+  document.querySelectorAll('.dragging, .over, .drop-before, .drop-after').forEach(el => el.classList.remove('dragging', 'over', 'drop-before', 'drop-after'));
+  if (needRender) renderSoon();
+}
+document.addEventListener('dragend', endDrag);
+// before/after the element's midpoint along the given axis
+const dropSide = (e, el, axis) => {
+  const r = el.getBoundingClientRect();
+  return axis === 'x' ? (e.clientX < r.left + r.width / 2 ? 'before' : 'after') : (e.clientY < r.top + r.height / 2 ? 'before' : 'after');
+};
+const markSide = (el, side) => { el.classList.toggle('drop-before', side === 'before'); el.classList.toggle('drop-after', side === 'after'); };
+// move item x in array a to sit before/after item target
+function reorder(a, x, target, side) {
+  if (x === target) return;
+  a.splice(a.indexOf(x), 1);
+  a.splice(a.indexOf(target) + (side === 'after' ? 1 : 0), 0, x);
+}
+
 function render() {
   renderHeader();
-  const tabs = document.getElementById('tabs'), board = document.getElementById('board');
+  const tabs = document.getElementById('tabs'), filters = document.getElementById('filters'), board = document.getElementById('board');
   const p = project();
-  if (!p) { tabs.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
+  if (!p) { tabs.replaceChildren(); filters.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
   const orphans = showingOrphans(), mp = orphans ? null : currentMajor();
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
     h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'),
     orphanTabEl(p, orphans));
+  renderFilters(p, filters);
 
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
   if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
@@ -206,52 +303,87 @@ function render() {
     h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: 'New stage' }); save(); render(); } }, '+ Add stage'));
 }
 
-// drag-target props for a tab: dropping a card on it calls onDrop(task)
-function tabDrop(p, accepts, onDrop) {
-  return {
-    ondragover: e => { if (dragId && accepts()) { e.preventDefault(); e.currentTarget.classList.add('over'); } },
-    ondragleave: e => e.currentTarget.classList.remove('over'),
-    ondrop: e => {
-      e.preventDefault();
-      const t = p.tasks.find(x => x.id === dragId);
-      if (t && accepts()) { onDrop(t); save(); render(); }
-    },
-  };
+function renderFilters(p, el) {
+  if (!p.tags.length) return el.replaceChildren();
+  const f = activeFilter(p);
+  const toggle = id => { setFilter(p, f.includes(id) ? f.filter(x => x !== id) : [...f, id]); render(); };
+  el.replaceChildren(
+    h('span', { class: 'label' }, f.length ? 'Showing cards tagged any of:' : 'Filter by tag:'),
+    ...[...p.tags].sort((a, b) => a.name.localeCompare(b.name)).map(t =>
+      h('button', { class: 'chip ' + (f.includes(t.id) ? 'on' : 'off'), style: '--c:' + t.color, 'aria-pressed': String(f.includes(t.id)), onclick: () => toggle(t.id) }, t.name)),
+    ...(f.length ? [h('button', { class: 'link', onclick: () => { setFilter(p, []); render(); } }, 'Clear')] : []));
 }
 
 function tabEl(p, m, active) {
   const n = p.tasks.filter(t => m.stages.some(s => s.id === t.stageId)).length;
-  return h('div', { class: 'tab' + (active ? ' active' : ''),
+  const tab = h('div', { class: 'tab' + (active ? ' active' : ''), draggable: true, title: 'Drag to reorder',
     onclick: () => { if (!active) { setView(m.id); render(); } },
-    // dropping a card on a tab moves it to that major phase's first stage
-    ...tabDrop(p, () => m.stages.length, t => { moveTask(p, t, m.stages[0].id, null); setView(m.id); }) },
+    ondragstart: e => { if (drag) return; drag = { kind: 'tab', id: m.id }; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'move'; },
+    ondragover: e => {
+      if (!drag) return;
+      if (drag.kind === 'tab' && drag.id !== m.id) { e.preventDefault(); markSide(tab, dropSide(e, tab, 'x')); }
+      // a card goes to this phase's first stage; a stage row moves to this phase
+      else if ((drag.kind === 'card' && m.stages.length) || (drag.kind === 'stage' && !m.stages.some(s => s.id === drag.id))) { e.preventDefault(); tab.classList.add('over'); }
+    },
+    ondragleave: () => tab.classList.remove('over', 'drop-before', 'drop-after'),
+    ondrop: e => {
+      e.preventDefault();
+      const d = drag; endDrag();
+      if (!d) return;
+      if (d.kind === 'tab') { const x = p.majorPhases.find(x => x.id === d.id); if (x) reorder(p.majorPhases, x, m, dropSide(e, tab, 'x')); }
+      else if (d.kind === 'card') { const t = p.tasks.find(x => x.id === d.id); if (!t || !m.stages.length) return; moveTask(p, t, m.stages[0].id, null); setView(m.id); }
+      else if (d.kind === 'stage') {
+        const from = p.majorPhases.find(x => x.stages.some(s => s.id === d.id));
+        if (!from || from === m) return;
+        const st = from.stages.find(s => s.id === d.id);
+        from.stages = from.stages.filter(s => s !== st); m.stages.push(st);
+      }
+      save(); render();
+    } },
     active
-      ? h('input', { value: m.name, size: Math.max(6, m.name.length), onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
+      ? h('input', { value: m.name, size: Math.max(6, m.name.length),
+          // text in a draggable element can't be selected with the mouse, so pause dragging while editing
+          onmousedown: () => { tab.draggable = false; }, onblur: () => { tab.draggable = true; },
+          onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
       : h('span', { class: 'name' }, m.name),
     h('span', { class: 'count' }, n),
     active ? [
       h('button', { class: 'link', title: 'Move left', onclick: () => moveIn(p.majorPhases, m, -1) }, '‹'),
       h('button', { class: 'link', title: 'Move right', onclick: () => moveIn(p.majorPhases, m, 1) }, '›'),
       h('button', { class: 'link', title: 'Delete major phase', onclick: () => delMajor(m) }, '✕')] : null);
+  return tab;
 }
 
 function orphanTabEl(p, active) {
   const n = orphansOf(p).length;
-  return h('div', { class: 'tab orphans' + (active ? ' active' : '') + (n ? ' has' : ''), title: 'Cards whose stage or major phase was deleted',
+  const tab = h('div', { class: 'tab orphans' + (active ? ' active' : '') + (n ? ' has' : ''), title: 'Cards whose stage or major phase was deleted',
     onclick: () => { if (!active) { setView(ORPHANS); render(); } },
-    ...tabDrop(p, () => true, t => orphan(p, [t], null)) },
-    h('span', { class: 'name' }, 'Orphaned cards'), h('span', { class: 'count' }, n));
-}
-
-// cards row with drop positioning; stageId null is the orphaned cards row
-function cardsRow(p, tasks, stageId, ...head) {
-  const cards = h('div', { class: 'cards' }, tasks.map(cardEl));
-  const row = h('div', { class: 'stage',
-    ondragover: e => { e.preventDefault(); row.classList.add('over'); },
-    ondragleave: () => row.classList.remove('over'),
+    ondragover: e => { if (drag?.kind === 'card') { e.preventDefault(); tab.classList.add('over'); } },
+    ondragleave: () => tab.classList.remove('over'),
     ondrop: e => {
       e.preventDefault();
-      const t = p.tasks.find(t => t.id === dragId);
+      const d = drag; endDrag();
+      const t = d?.kind === 'card' && p.tasks.find(x => x.id === d.id);
+      if (t) { orphan(p, [t], null); save(); render(); }
+    } },
+    h('span', { class: 'name' }, 'Orphaned cards'), h('span', { class: 'count' }, n));
+  return tab;
+}
+
+// cards row with drop positioning; stageId null is the orphaned cards row. Stage rows also accept dragged stages.
+function cardsRow(p, tasks, stageId, onStageDrop, ...head) {
+  const cards = h('div', { class: 'cards' }, tasks.map(t => cardEl(p, t)));
+  const row = h('div', { class: 'stage',
+    ondragover: e => {
+      if (drag?.kind === 'card') { e.preventDefault(); row.classList.add('over'); }
+      else if (drag?.kind === 'stage' && onStageDrop) { e.preventDefault(); markSide(row, dropSide(e, row, 'y')); }
+    },
+    ondragleave: e => { if (!row.contains(e.relatedTarget)) row.classList.remove('over', 'drop-before', 'drop-after'); },
+    ondrop: e => {
+      e.preventDefault();
+      const d = drag; endDrag();
+      if (d?.kind === 'stage' && onStageDrop) { onStageDrop(d.id, dropSide(e, row, 'y')); return; }
+      const t = d?.kind === 'card' && p.tasks.find(t => t.id === d.id);
       if (!t) return;
       // drop position: before the first card that is on a later line, or on this line with its midpoint right of the cursor
       // (skip the dragged card itself: it is removed from p.tasks in moveTask, so it can't be an anchor)
@@ -269,37 +401,48 @@ function cardsRow(p, tasks, stageId, ...head) {
   return row;
 }
 
+const countText = (shown, all) => (shown === all ? `${all}` : `${shown}/${all}`) + (all === 1 ? ' card' : ' cards');
+
 function stageEl(p, mp, st) {
-  const tasks = p.tasks.filter(t => t.stageId === st.id);
-  return cardsRow(p, tasks, st.id,
-    h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } }),
+  const all = p.tasks.filter(t => t.stageId === st.id), shown = visible(p, all);
+  let row;
+  const grip = h('span', { class: 'grip', draggable: true, title: 'Drag to reorder, or onto another tab to move it there',
+    ondragstart: e => { drag = { kind: 'stage', id: st.id }; e.dataTransfer.setData('text/plain', st.name); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDragImage(row, 20, 20); } }, '⠿');
+  row = cardsRow(p, shown, st.id,
+    (id, side) => { const x = mp.stages.find(s => s.id === id); if (x) { reorder(mp.stages, x, st, side); save(); render(); } },
+    h('div', { class: 'name-row' }, grip,
+      h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } })),
     h('div', { class: 'tools' },
-      h('span', { class: 'count' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
+      h('span', { class: 'count' }, countText(shown.length, all.length)),
       h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
       h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
       h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
     h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task'));
+  return row;
 }
 
 function orphanPage(p) {
-  const tasks = orphansOf(p);
-  return cardsRow(p, tasks, null,
+  const all = orphansOf(p), shown = visible(p, all);
+  return cardsRow(p, shown, null, null,
     h('strong', { style: 'padding:5px 8px' }, 'Orphaned cards'),
-    h('span', { class: 'count', style: 'padding:0 8px' }, tasks.length + (tasks.length === 1 ? ' card' : ' cards')),
+    h('span', { class: 'count', style: 'padding:0 8px' }, countText(shown.length, all.length)),
     h('p', { class: 'hint' }, 'Cards left behind when their stage or major phase was deleted. Drag one onto a major phase tab, or open it to pick a stage.'));
 }
 
-function cardEl(t) {
-  const pct = progress(t);
-  return h('div', { class: 'card', draggable: true, 'data-id': t.id,
-    ondragstart: e => { dragId = t.id; e.currentTarget.classList.add('dragging'); },
-    ondragend: e => { dragId = null; e.currentTarget.classList.remove('dragging'); if (needRender) renderSoon(); },
+function cardEl(p, t) {
+  const cat = categoryOf(p, t), tags = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
+  const done = t.steps.filter(x => x.done).length;
+  return h('div', { class: 'card', draggable: true, 'data-id': t.id, style: '--cat:' + cat.color,
+    ondragstart: e => { drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging'); },
     onclick: () => openTask(t) },
+    h('div', { class: 'cat' }, h('span', { class: 'dot', style: '--c:' + cat.color }), cat.name),
     h('div', { class: 'title' }, t.title),
+    tags.length ? h('div', { class: 'chips' }, tags.map(tag => tagChip(tag))) : null,
     h('div', { class: 'meta' },
-      h('span', { class: 'prio ' + t.priority }, t.priority),
-      t.steps.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${pct * 100}%` })),
-        h('span', {}, `${t.steps.filter(x => x.done).length}/${t.steps.length}`)] : null),
+      h('span', { class: 'badge prio ' + t.priority }, cap(t.priority)),
+      t.size ? h('span', { class: 'badge', title: 'Size' }, cap(t.size)) : null,
+      t.attachments.length ? h('span', { title: 'Attachments' }, '📎 ' + t.attachments.length) : null,
+      t.steps.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${progress(t) * 100}%` })), h('span', {}, `${done}/${t.steps.length}`)] : null),
     t.orphanedFrom ? h('div', { class: 'from' }, 'From: ' + t.orphanedFrom) : null);
 }
 
@@ -326,7 +469,7 @@ function addMajor() {
   const m = { id: uid(), name: 'New phase', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) };
   project().majorPhases.push(m); setView(m.id); save(); render();
 }
-// stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked
+// stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked (the server then deletes their files)
 function delMajor(m) {
   const p = project(), ids = new Set(m.stages.map(s => s.id)), cards = p.tasks.filter(t => ids.has(t.stageId));
   confirmDelete(`major phase "${m.name}"`, `${m.stages.length} stage(s) and ${cards.length} card(s)`, cards.length, delCards => {
@@ -342,36 +485,71 @@ function delStage(mp, st) {
   });
 }
 function addTask(st) {
-  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, priority: 'medium', steps: [] };
-  project().tasks.push(t); save(); render(); openTask(t);
+  const p = project();
+  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, categoryId: Model.defaultCategory(p).id,
+    priority: 'medium', tags: [], steps: [], attachments: [] };
+  p.tasks.push(t); save(); render(); openTask(t);
+}
+function newTag(p, name) {
+  const tag = { id: uid(), name: name.trim().slice(0, 30), color: Model.TAG_COLORS[p.tags.length % Model.TAG_COLORS.length] };
+  p.tags.push(tag);
+  return tag;
 }
 
-// ---------- modal: task dialog and delete confirmation ----------
+// ---------- modal: task dialog, labels editor and delete confirmations ----------
 const modal = document.getElementById('modal'), dialog = document.getElementById('dialog');
 modal.addEventListener('mousedown', e => { if (e.target === modal) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-// set while a task dialog is open: refreshes it when someone else changes the task
+// set while a dialog is open: refreshes it when someone else changes the board
 let syncDialog = null;
-function closeModal() { syncDialog = null; modal.classList.remove('open'); render(); }
+function closeModal() { syncDialog = null; modal.classList.remove('open'); dialog.classList.remove('files-over'); render(); }
+function showDialog(...kids) {
+  dialog.ondragover = dialog.ondragleave = dialog.ondrop = null;  // a task dialog sets these for file drops
+  dialog.replaceChildren(...kids.flat().filter(k => k != null)); modal.classList.add('open');
+}
+const buttons = (...b) => h('div', { class: 'row', style: 'justify-content:flex-end' }, ...b);
 
 function confirmDelete(what, holds, nCards, onConfirm) {
+  syncDialog = null;
   const box = h('input', { type: 'checkbox', onchange: () => { note.textContent = outcome(); } });
-  const outcome = () => box.checked ? `The ${nCards} card(s) will be permanently deleted.`
+  const outcome = () => box.checked ? `The ${nCards} card(s) will be permanently deleted, with their attachments.`
     : `The ${nCards} card(s) will be moved to Orphaned cards.`;
   const note = h('p', { class: 'count' }, outcome());
-  dialog.replaceChildren(
+  showDialog(
     h('h2', {}, `Delete ${what}?`),
     h('p', {}, `It holds ${holds}.`),
     ...(nCards ? [h('label', { class: 'check' }, box, 'Delete cards'), note] : []),
-    h('div', { class: 'row', style: 'justify-content:flex-end' },
-      h('button', { onclick: closeModal }, 'Cancel'),
+    buttons(h('button', { onclick: closeModal }, 'Cancel'),
       h('button', { class: 'danger', onclick: () => { onConfirm(box.checked); save(); closeModal(); } }, 'Delete')));
-  modal.classList.add('open');
+}
+
+// files dropped outside the attachment area shouldn't make the browser navigate away
+for (const ev of ['dragover', 'drop']) window.addEventListener(ev, e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+
+async function uploadFiles(p, t, files, status, redraw) {
+  for (const f of files) {
+    status.textContent = `Uploading ${f.name}…`;
+    try {
+      const r = await fetch('/api/files', { method: 'POST', body: f,
+        headers: { 'Content-Type': f.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(f.name) } });
+      if (!r.ok) throw new Error(r.status === 413 ? 'the file is too large' : 'upload failed');
+      const a = await r.json();
+      if (!p.tasks.includes(t)) return;
+      t.attachments.push({ id: a.id, name: a.name, size: a.size, type: a.type, uploadedAt: a.uploadedAt });
+      save(); redraw();
+      status.textContent = '';
+    } catch (err) {
+      status.textContent = `Couldn't upload ${f.name}: ${err.message}.`;
+      return;
+    }
+  }
 }
 
 function openTask(t) {
   const p = project();
-  const stepsBox = h('div', { style: 'display:flex;flex-direction:column;gap:4px' });
+
+  // steps
+  const stepsBox = h('div', { class: 'list' });
   const drawSteps = () => {
     stepsBox.replaceChildren(...t.steps.map(s =>
       h('div', { class: 'step' + (s.done ? ' done' : '') },
@@ -381,75 +559,218 @@ function openTask(t) {
         h('button', { class: 'link', onclick: () => { const i = t.steps.indexOf(s); if (i > 0) { [t.steps[i - 1], t.steps[i]] = [t.steps[i], t.steps[i - 1]]; save(); drawSteps(); } } }, '↑'),
         h('button', { class: 'link', onclick: () => { t.steps = t.steps.filter(x => x !== s); save(); drawSteps(); } }, '✕'))));
   };
-  drawSteps();
   const newStep = h('input', { placeholder: 'Add a step and press Enter',
     onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) {
       t.steps.push({ id: uid(), name: e.target.value.trim(), done: false });
       e.target.value = ''; save(); drawSteps(); } } });
+
+  // stage, category, priority, size
   const stageOptions = () => [
     h('option', { value: '', selected: orphansOf(p).includes(t) }, '— Orphaned (no stage) —'),
     ...p.majorPhases.map(m => h('optgroup', { label: m.name },
       m.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name))))];
-
-  const title = h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } });
   // the board follows the card to wherever it is moved
   const stageSel = h('select', { onchange: e => {
       const id = e.target.value;
       if (id) { t.stageId = id; delete t.orphanedFrom; setView(p.majorPhases.find(m => m.stages.some(s => s.id === id)).id); }
       else { orphan(p, [t]); setView(ORPHANS); }
       save(); } }, stageOptions());
+  const catDot = h('span', { class: 'dot', style: 'width:12px;height:12px' });
+  const catOptions = () => p.categories.map(c => h('option', { value: c.id, selected: c.id === categoryOf(p, t).id }, c.name));
+  const catSel = h('select', { required: true, onchange: e => { t.categoryId = e.target.value; save(); showCat(); } }, catOptions());
+  const showCat = () => { catDot.style.setProperty('--c', categoryOf(p, t).color); };
   const prio = h('select', { onchange: e => { t.priority = e.target.value; save(); } },
-    ['low', 'medium', 'high'].map(v => h('option', { value: v, selected: v === t.priority }, v)));
-  const from = h('p', { class: 'from' });
-  const desc = h('textarea', { rows: 4, value: t.description, oninput: e => { t.description = e.target.value; save(); } });
-  const showFrom = () => { from.textContent = t.orphanedFrom ? 'Orphaned from: ' + t.orphanedFrom : ''; from.hidden = !t.orphanedFrom; };
-  showFrom();
+    Model.PRIORITIES.map(v => h('option', { value: v, selected: v === t.priority }, cap(v))));
+  const size = h('select', { onchange: e => { if (e.target.value) t.size = e.target.value; else delete t.size; save(); } },
+    h('option', { value: '' }, '—'), Model.SIZES.map(v => h('option', { value: v, selected: v === t.size }, cap(v))));
 
-  dialog.replaceChildren(
+  // tags: up to Model.MAX_TAGS; typing a new name creates a project tag
+  const tagList = h('datalist', { id: 'tag-options' });
+  const tagInput = h('input', { placeholder: 'Add a tag…', list: 'tag-options', maxLength: 30,
+    onkeydown: e => {
+      if (e.key !== 'Enter' && e.key !== ',') return;
+      e.preventDefault();
+      const name = tagInput.value.trim();
+      if (!name || t.tags.length >= Model.MAX_TAGS) return;
+      const tag = p.tags.find(x => sameName(x.name, name)) || newTag(p, name);
+      if (!t.tags.includes(tag.id)) t.tags.push(tag.id);
+      tagInput.value = ''; save(); drawTags();
+    } });
+  const tagBox = h('div', { class: 'tag-edit' }), tagCount = h('span', { class: 'count' });
+  const drawTags = () => {
+    const mine = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
+    tagBox.replaceChildren(...mine.map(tag => tagChip(tag, h('button', { title: 'Remove tag', onclick: () => { t.tags = t.tags.filter(id => id !== tag.id); save(); drawTags(); } }, '✕'))), tagInput);
+    tagList.replaceChildren(...p.tags.filter(x => !t.tags.includes(x.id)).map(x => h('option', { value: x.name })));
+    const full = t.tags.length >= Model.MAX_TAGS;
+    tagInput.disabled = full;
+    tagInput.placeholder = full ? `Limit of ${Model.MAX_TAGS} tags reached` : 'Add a tag and press Enter…';
+    tagCount.textContent = `${t.tags.length}/${Model.MAX_TAGS}`;
+  };
+
+  // description: Markdown, rendered unless editing
+  const title = h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } });
+  const desc = h('textarea', { rows: 6, value: t.description, placeholder: 'Markdown supported: **bold**, *italic*, `code`, - lists, [links](https://…)',
+    oninput: e => { t.description = e.target.value; save(); } });
+  const preview = h('div', { class: 'md' });
+  let editing = !t.description;
+  const modeBtn = h('button', { class: 'link', onclick: () => { editing = !editing; drawDesc(); if (editing) desc.focus(); } });
+  const drawDesc = () => {
+    preview.innerHTML = Markdown.render(t.description);  // Markdown.render escapes all text: safe to insert
+    desc.hidden = !editing; preview.hidden = editing;
+    modeBtn.textContent = editing ? 'Preview' : 'Edit';
+  };
+
+  // attachments
+  const fileList = h('div', { class: 'list' }), uploadStatus = h('p', { class: 'count' });
+  const picker = h('input', { type: 'file', multiple: true, hidden: true,
+    onchange: e => { uploadFiles(p, t, [...e.target.files], uploadStatus, drawFiles); e.target.value = ''; } });
+  const drawFiles = () => {
+    fileList.replaceChildren(...t.attachments.map(a => {
+      const href = `/files/${a.id}/${encodeURIComponent(a.name)}`;
+      return h('div', { class: 'file' },
+        /^image\/(png|jpeg|gif|webp)$/.test(a.type) ? h('img', { src: href, alt: '' }) : h('span', {}, '📄'),
+        h('a', { href, download: a.name, title: a.name }, a.name),
+        h('span', { class: 'count' }, fmtSize(a.size)),
+        h('button', { class: 'link', title: 'Delete attachment', onclick: () => {
+          if (!confirm(`Delete attachment "${a.name}"?`)) return;
+          t.attachments = t.attachments.filter(x => x.id !== a.id); save(); drawFiles(); } }, '✕'));
+    }));
+  };
+  const fileDrop = {
+    ondragover: e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); dialog.classList.add('files-over'); } },
+    ondragleave: e => { if (!dialog.contains(e.relatedTarget)) dialog.classList.remove('files-over'); },
+    ondrop: e => {
+      if (!e.dataTransfer.files.length) return;
+      e.preventDefault(); dialog.classList.remove('files-over');
+      uploadFiles(p, t, [...e.dataTransfer.files], uploadStatus, drawFiles);
+    },
+  };
+  const from = h('p', { class: 'from' });
+  const showFrom = () => { from.textContent = t.orphanedFrom ? 'Orphaned from: ' + t.orphanedFrom : ''; from.hidden = !t.orphanedFrom; };
+
+  drawSteps(); drawTags(); drawDesc(); drawFiles(); showFrom(); showCat();
+  showDialog(
     title,
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Stage'), stageSel),
-      h('div', {}, h('label', {}, 'Priority'), prio)),
+      h('div', {}, h('label', {}, 'Category'), h('div', { style: 'display:flex;align-items:center;gap:6px' }, catDot, catSel))),
+    h('div', { class: 'row' },
+      h('div', {}, h('label', {}, 'Priority'), prio),
+      h('div', {}, h('label', {}, 'Size'), size)),
     from,
-    h('div', {}, h('label', {}, 'Description'), desc),
+    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Tags'), tagCount), tagBox, tagList),
+    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Description'), modeBtn), desc, preview),
+    h('div', {},
+      h('div', { class: 'field-head' }, h('label', {}, 'Attachments'),
+        h('button', { class: 'link', onclick: () => picker.click() }, '+ Attach files')),
+      fileList, uploadStatus, picker,
+      h('p', { class: 'hint', style: 'padding:0' }, 'Or drop files onto this dialog.')),
     h('div', {}, h('label', {}, 'Steps'), stepsBox, newStep),
     h('div', { class: 'row', style: 'justify-content:space-between' },
-      h('button', { onclick: () => { if (confirm('Delete this task?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
+      h('button', { onclick: () => { if (confirm('Delete this task and its attachments?')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
       h('button', { class: 'primary', onclick: closeModal }, 'Done')));
-  modal.classList.add('open');
+  // drop handlers live on the whole dialog while it shows this task
+  Object.entries(fileDrop).forEach(([k, f]) => { dialog[k] = f; });
 
   // someone else changed the board: refresh every field except the one being typed in
   syncDialog = () => {
     if (!state.projects.includes(p) || !p.tasks.includes(t)) {
       syncDialog = null;
-      dialog.replaceChildren(h('h2', {}, 'This card was deleted'), h('p', {}, `Someone else deleted "${t.title}".`),
-        h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'primary', onclick: closeModal }, 'Close')));
+      showDialog(h('h2', {}, 'This card was deleted'), h('p', {}, `Someone else deleted "${t.title}".`),
+        buttons(h('button', { class: 'primary', onclick: closeModal }, 'Close')));
       return;
     }
     const a = document.activeElement;
     if (a !== title) title.value = t.title;
     if (a !== desc) desc.value = t.description;
     if (a !== prio) prio.value = t.priority;
+    if (a !== size) size.value = t.size || '';
     if (a !== stageSel) stageSel.replaceChildren(...stageOptions());
+    if (a !== catSel) catSel.replaceChildren(...catOptions());
+    if (a !== tagInput) drawTags();
     if (!stepsBox.contains(a)) drawSteps();
-    showFrom();
+    drawDesc(); drawFiles(); showFrom(); showCat();
   };
+}
+// ---------- categories & tags editor ----------
+function openLabels() {
+  const p = project();
+  if (!p) return;
+  const uses = (key, id) => p.tasks.filter(t => key === 'tag' ? t.tags.includes(id) : t.categoryId === id).length;
+  // rename unless another label of the same kind already has that name
+  const rename = (list, x) => e => {
+    const name = e.target.value.trim().slice(0, 30);
+    if (name && !list.some(o => o !== x && sameName(o.name, name))) x.name = name;
+    e.target.value = x.name; save();
+  };
+  const row = (list, x, kind, onDelete, canDelete) => h('div', { class: 'item' },
+    h('input', { type: 'color', value: x.color, title: 'Colour', onchange: e => { x.color = e.target.value; save(); } }),
+    h('input', { type: 'text', value: x.name, onchange: rename(list, x) }),
+    h('span', { class: 'count' }, `${uses(kind, x.id)} card(s)`),
+    h('button', { class: 'link', title: 'Delete', disabled: !canDelete, onclick: () => onDelete(x) }, '✕'));
+
+  const draw = () => {
+    if (!state.projects.includes(p)) return closeModal();
+    const a = document.activeElement;
+    if (a && dialog.contains(a) && a.matches('input')) return;  // don't redraw under someone typing
+    showDialog(
+      h('h2', {}, `Categories & tags: ${p.name}`),
+      h('h3', {}, 'Categories'),
+      h('p', { class: 'hint', style: 'padding:0' }, 'Every card has exactly one category, shown as the coloured stripe on the card.'),
+      h('div', { class: 'list' }, p.categories.map(c => row(p.categories, c, 'category', delCategory, p.categories.length > 1))),
+      h('div', {}, h('button', { onclick: () => {
+        p.categories.push({ id: uid(), name: uniqueName(p.categories, 'New category'), color: Model.TAG_COLORS[p.categories.length % Model.TAG_COLORS.length] });
+        save(); draw(); } }, '+ Add category')),
+      h('h3', {}, 'Tags'),
+      h('p', { class: 'hint', style: 'padding:0' }, `A card can have up to ${Model.MAX_TAGS} tags. Deleting a tag removes it from every card.`),
+      p.tags.length ? h('div', { class: 'list' }, p.tags.map(tag => row(p.tags, tag, 'tag', delTag, true))) : h('p', { class: 'count' }, 'No tags yet.'),
+      h('div', {}, h('button', { onclick: () => { newTag(p, uniqueName(p.tags, 'New tag')); save(); draw(); } }, '+ Add tag')),
+      buttons(h('button', { class: 'primary', onclick: closeModal }, 'Done')));
+    syncDialog = draw;
+  };
+  const uniqueName = (list, base) => { let n = base, i = 2; while (list.some(x => sameName(x.name, n))) n = `${base} ${i++}`; return n; };
+
+  function delTag(tag) {
+    const n = uses('tag', tag.id);
+    if (n && !confirm(`Delete tag "${tag.name}"? It will be removed from ${n} card(s).`)) return;
+    p.tags = p.tags.filter(x => x !== tag);
+    for (const t of p.tasks) t.tags = t.tags.filter(id => id !== tag.id);
+    save(); draw();
+  }
+  // a category can only go once its cards have somewhere else to be
+  function delCategory(c) {
+    const others = p.categories.filter(x => x !== c), n = uses('category', c.id);
+    const target = h('select', {}, others.map(o => h('option', { value: o.id }, o.name)));
+    syncDialog = null;
+    showDialog(
+      h('h2', {}, `Delete category "${c.name}"?`),
+      n ? [h('p', {}, `${n} card(s) use it. Move them to:`), target] : h('p', {}, 'No cards use it.'),
+      buttons(h('button', { onclick: draw }, 'Cancel'),
+        h('button', { class: 'danger', onclick: () => {
+          for (const t of p.tasks) if (t.categoryId === c.id) t.categoryId = target.value || others[0].id;
+          p.categories = p.categories.filter(x => x !== c);
+          save(); render(); draw();
+        } }, 'Delete')));
+  }
+  draw();
 }
 
 // ---------- project controls ----------
-document.getElementById('projectSel').onchange = e => { currentId = e.target.value; localStorage.setItem('currentProject', currentId); render(); };
+document.getElementById('projectSel').onchange = e => { currentId = e.target.value; store.set('currentProject', currentId); render(); };
 document.getElementById('newProject').onclick = () => {
+  if (!state) return;
   const name = prompt('Project name?'); if (!name) return;
-  const p = { id: uid(), name, tasks: [], majorPhases: [{ id: uid(), name: 'Phase 1',
-    stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) }] };
-  state.projects.push(p); currentId = p.id; localStorage.setItem('currentProject', currentId); save(); render();
+  const p = { id: uid(), name, tasks: [], tags: [], categories: Model.newCategories(uid),
+    majorPhases: [{ id: uid(), name: 'Phase 1', stages: ['To do', 'In progress', 'Done'].map(n => ({ id: uid(), name: n })) }] };
+  state.projects.push(p); currentId = p.id; store.set('currentProject', currentId); save(); render();
 };
 document.getElementById('renameProject').onclick = () => {
-  if (!project()) return;
+  if (!state || !project()) return;
   const name = prompt('New name?', project().name); if (name) { project().name = name; save(); render(); }
 };
+document.getElementById('labels').onclick = () => { if (state) openLabels(); };
 document.getElementById('delProject').onclick = () => {
-  const cur = project(); if (!cur) return;
+  const cur = state && project(); if (!cur) return;
   if (!confirm(`Delete project "${cur.name}" and all its tasks?`)) return;
   state.projects = state.projects.filter(p => p !== cur); currentId = state.projects[0]?.id; save(); render();
 };

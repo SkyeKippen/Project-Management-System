@@ -3,3 +3,5 @@ data.json
 server.log
 .env
 data.json.tmp
+uploads/
+backups/
