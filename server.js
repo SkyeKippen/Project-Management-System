@@ -24,6 +24,7 @@ const BACKUP_KEEP = (Number(process.env.BACKUP_KEEP_DAYS) || 14) * 86400e3;
 const uid = () => crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 
 const seed = () => ({
+  people: [],
   projects: [{
     id: 'p1', name: 'Sample Project',
     categories: [
@@ -69,9 +70,9 @@ function migrate(s) {
     }
     // task.phases (a task's own checklist) was renamed to task.steps
     for (const t of p.tasks) if (!t.steps) { t.steps = t.phases || []; delete t.phases; changed = true; }
-    // categories (existing cards become Feature Addition), tags, attachments, 4-level priority
-    if (Model.normalizeProject(p, uid)) changed = true;
   }
+  // people list, categories (existing cards become Feature Addition), tags, attachments, 4-level priority
+  if (Model.normalizeState(s, uid)) changed = true;
   return changed;
 }
 
@@ -210,7 +211,7 @@ const server = http.createServer((req, res) => {
         const before = Sync.clone(state), hadFiles = attachmentIds();
         try {
           Sync.apply(state, ops);
-          for (const p of state.projects) Model.normalizeProject(p, uid);
+          Model.normalizeState(state, uid);
         } catch { state = before; res.writeHead(400); return res.end('invalid ops'); }
         // files of attachments that were removed, or whose card was deleted
         const hasFiles = attachmentIds();
