@@ -45,6 +45,9 @@
       // an assignee who was deleted (perhaps at the same moment) leaves the card or step unassigned
       for (const x of [t, ...t.steps]) fix('assigneeId' in x && !personIds.has(x.assigneeId), () => { delete x.assigneeId; });
     }
+    // a tag no card uses any more (orphaned cards count) is removed, to keep the tag list and filter bar tidy
+    const used = new Set(p.tasks.flatMap(t => t.tags));
+    fix(p.tags.some(x => !used.has(x.id)), () => { p.tags = p.tags.filter(x => used.has(x.id)); });
     return changed;
   }
 

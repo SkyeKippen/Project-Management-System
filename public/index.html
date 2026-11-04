@@ -357,6 +357,8 @@ function renderFilters(p, el) {
   const group = (kind, items, color, label, activeLabel) => {
     if (!items.length) return [];
     const f = activeFilter(p, kind);
+    // forget saved selections of tags/people that no longer exist
+    try { if (JSON.stringify(f) !== (store.get(filterKey(p, kind)) || '[]')) setFilter(p, f, kind); } catch {}
     const toggle = id => { setFilter(p, f.includes(id) ? f.filter(x => x !== id) : [...f, id], kind); render(); };
     return [
       h('span', { class: 'label' }, f.length ? activeLabel : label),
@@ -364,7 +366,9 @@ function renderFilters(p, el) {
         h('button', { class: 'chip ' + (f.includes(x.id) ? 'on' : 'off'), style: '--c:' + color(x), 'aria-pressed': String(f.includes(x.id)), onclick: () => toggle(x.id) }, x.name)),
       ...(f.length ? [h('button', { class: 'link', onclick: () => { setFilter(p, [], kind); render(); } }, 'Clear')] : [])];
   };
-  const tags = group('tag', p.tags, x => x.color, 'Filter by tag:', 'Tagged any of:');
+  // only tags some card uses (the server removes unused ones; this also covers the moment before it does)
+  const used = new Set(p.tasks.flatMap(t => t.tags));
+  const tags = group('tag', p.tags.filter(x => used.has(x.id)), x => x.color, 'Filter by tag:', 'Tagged any of:');
   const people = group('person', state.people, personColor, 'Filter by person:', 'Assigned to any of:');
   el.replaceChildren(...tags, ...(tags.length && people.length ? [h('span', { class: 'sep' })] : []), ...people);
 }
@@ -785,9 +789,8 @@ function openLabels() {
         p.categories.push({ id: uid(), name: uniqueName(p.categories, 'New category'), color: Model.TAG_COLORS[p.categories.length % Model.TAG_COLORS.length] });
         save(); draw(); } }, '+ Add category')),
       h('h3', {}, 'Tags'),
-      h('p', { class: 'hint', style: 'padding:0' }, `A card can have up to ${Model.MAX_TAGS} tags. Deleting a tag removes it from every card.`),
+      h('p', { class: 'hint', style: 'padding:0' }, `Tags are created by typing one on a card (up to ${Model.MAX_TAGS} per card), and disappear by themselves once no card uses them. Deleting a tag here removes it from every card.`),
       p.tags.length ? h('div', { class: 'list' }, p.tags.map(tag => row(p.tags, tag, 'tag', delTag, true))) : h('p', { class: 'count' }, 'No tags yet.'),
-      h('div', {}, h('button', { onclick: () => { newTag(p, uniqueName(p.tags, 'New tag')); save(); draw(); } }, '+ Add tag')),
       buttons(h('button', { class: 'primary', onclick: closeModal }, 'Done')));
     syncDialog = draw;
   };
