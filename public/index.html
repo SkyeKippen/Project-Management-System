@@ -495,8 +495,8 @@ function cardEl(p, t) {
     tags.length ? h('div', { class: 'chips' }, tags.map(tag => tagChip(tag))) : null,
     personById(t.assigneeId) ? h('div', { class: 'assignee' }, avatar(personById(t.assigneeId)), h('span', {}, personById(t.assigneeId).name)) : null,
     h('div', { class: 'meta' },
-      h('span', { class: 'badge prio ' + t.priority }, cap(t.priority)),
-      t.size ? h('span', { class: 'badge', title: 'Size' }, cap(t.size)) : null,
+      h('span', { class: 'badge prio ' + t.priority, title: 'Priority' }, 'P: ' + cap(t.priority)),
+      t.size ? h('span', { class: 'badge', title: 'Size' }, 'S: ' + cap(t.size)) : null,
       t.attachments.length ? h('span', { title: 'Attachments' }, '📎 ' + t.attachments.length) : null,
       t.steps.length ? [h('div', { class: 'bar' }, h('i', { style: `width:${progress(t) * 100}%` })), h('span', {}, `${done}/${t.steps.length}`)] : null),
     t.orphanedFrom ? h('div', { class: 'from' }, 'From: ' + t.orphanedFrom) : null);
