@@ -237,21 +237,23 @@ const currentMajor = () => {
 };
 const setView = id => store.set(viewKey(project()), id);
 
-// Board filters, per viewer and project. Within a group, a card matching ANY selected chip shows; when both groups
-// have selections a card must match both (tags AND people). Nothing selected shows everything.
-// A card matches a person if they are assigned to the card or to any of its steps.
-const filterKey = (p, kind) => (kind === 'tag' ? 'tagFilter:' : 'personFilter:') + p.id;
+// Board filters, per viewer and project, in three groups: category, tag and person. Within a group, a card matching
+// ANY selected chip shows; when several groups have selections a card must match each of them (e.g. category AND
+// tag). Nothing selected shows everything. A card matches a person if they are assigned to the card or any of its steps.
+const FILTER_KEYS = { tag: 'tagFilter:', person: 'personFilter:', category: 'categoryFilter:' };
+const filterKey = (p, kind) => FILTER_KEYS[kind] + p.id;
 const activeFilter = (p, kind = 'tag') => {
   let ids = [];
   try { ids = JSON.parse(store.get(filterKey(p, kind)) || '[]'); } catch {}
-  const valid = kind === 'tag' ? p.tags : state.people;
+  const valid = { tag: p.tags, person: state.people, category: p.categories }[kind];
   return Array.isArray(ids) ? ids.filter(id => valid.some(x => x.id === id)) : [];
 };
 const setFilter = (p, ids, kind = 'tag') => store.set(filterKey(p, kind), JSON.stringify(ids));
 const peopleOn = t => [t.assigneeId, ...t.steps.map(s => s.assigneeId)].filter(Boolean);
 const visible = (p, tasks) => {
-  const tags = activeFilter(p, 'tag'), people = activeFilter(p, 'person');
-  return tasks.filter(t => (!tags.length || t.tags.some(id => tags.includes(id))) &&
+  const cats = activeFilter(p, 'category'), tags = activeFilter(p, 'tag'), people = activeFilter(p, 'person');
+  return tasks.filter(t => (!cats.length || cats.includes(categoryOf(p, t).id)) &&
+    (!tags.length || t.tags.some(id => tags.includes(id))) &&
     (!people.length || peopleOn(t).some(id => people.includes(id))));
 };
 
@@ -354,7 +356,7 @@ function render() {
 }
 
 function renderFilters(p, el) {
-  const group = (kind, items, color, label, activeLabel) => {
+  const group = (kind, items, color, label, activeLabel, sort = true) => {
     if (!items.length) return [];
     const f = activeFilter(p, kind);
     // forget saved selections of tags/people that no longer exist
@@ -362,7 +364,7 @@ function renderFilters(p, el) {
     const toggle = id => { setFilter(p, f.includes(id) ? f.filter(x => x !== id) : [...f, id], kind); render(); };
     return [
       h('span', { class: 'label' }, f.length ? activeLabel : label),
-      ...[...items].sort((a, b) => a.name.localeCompare(b.name)).map(x =>
+      ...(sort ? [...items].sort((a, b) => a.name.localeCompare(b.name)) : items).map(x =>
         h('button', { class: 'chip ' + (f.includes(x.id) ? 'on' : 'off'), style: '--c:' + color(x), 'aria-pressed': String(f.includes(x.id)), onclick: () => toggle(x.id) }, x.name)),
       ...(f.length ? [h('button', { class: 'link', onclick: () => { setFilter(p, [], kind); render(); } }, 'Clear')] : [])];
   };
@@ -370,7 +372,11 @@ function renderFilters(p, el) {
   const used = new Set(p.tasks.flatMap(t => t.tags));
   const tags = group('tag', p.tags.filter(x => used.has(x.id)), x => x.color, 'Filter by tag:', 'Tagged any of:');
   const people = group('person', state.people, personColor, 'Filter by person:', 'Assigned to any of:');
-  el.replaceChildren(...tags, ...(tags.length && people.length ? [h('span', { class: 'sep' })] : []), ...people);
+  // categories in use, in their own order (the one set under Categories & tags) rather than alphabetical
+  const usedCats = new Set(p.tasks.map(t => categoryOf(p, t).id));
+  const cats = group('category', p.categories.filter(c => usedCats.has(c.id)), x => x.color, 'Filter by category:', 'Category any of:', false);
+  const groups = [cats, tags, people].filter(g => g.length);
+  el.replaceChildren(...groups.flatMap((g, i) => i ? [h('span', { class: 'sep' }), ...g] : g));
 }
 
 function tabEl(p, m, active) {
