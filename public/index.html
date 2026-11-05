@@ -114,6 +114,7 @@
   .dialog h2 { font-size:16px; margin:0; }
   .dialog h3 { font-size:14px; margin:6px 0 0; }
   .dialog p { margin:0; }
+  .dialog .check.default-cat { font-size:12px; color:var(--muted); white-space:nowrap; flex:none; }
   .dialog .check { display:flex; align-items:center; gap:6px; font-size:14px; color:var(--text); cursor:pointer; }
   .row { display:flex; gap:8px; align-items:flex-end; }
   .row > div { flex:1; min-width:0; }
@@ -1036,6 +1037,10 @@ function openLabels() {
   const row = (list, x, kind, onDelete, canDelete) => h('div', { class: 'item' },
     h('input', { type: 'color', value: x.color, title: 'Colour', onchange: e => { x.color = e.target.value; save(); } }),
     h('input', { type: 'text', value: x.name, onchange: rename(list, x) }),
+    // new cards start in the default category
+    kind === 'category' ? h('label', { class: 'check default-cat', title: 'New cards get this category' },
+      h('input', { type: 'radio', name: 'default-category', checked: Model.defaultCategory(p) === x,
+        onchange: () => { p.defaultCategoryId = x.id; save(); } }), 'Default') : null,
     h('span', { class: 'count' }, `${uses(kind, x.id)} card(s)`),
     h('button', { class: 'link', title: 'Delete', disabled: !canDelete, onclick: () => onDelete(x) }, '✕'));
 
@@ -1046,7 +1051,7 @@ function openLabels() {
     showDialog(
       h('h2', {}, `Categories & tags: ${p.name}`),
       h('h3', {}, 'Categories'),
-      h('p', { class: 'hint', style: 'padding:0' }, 'Every card has exactly one category, shown as the coloured stripe on the card.'),
+      h('p', { class: 'hint', style: 'padding:0' }, 'Every card has exactly one category, shown as the coloured stripe on the card. New cards get the Default one.'),
       h('div', { class: 'list' }, p.categories.map(c => row(p.categories, c, 'category', delCategory, p.categories.length > 1))),
       h('div', {}, h('button', { onclick: () => {
         p.categories.push({ id: uid(), name: uniqueName(p.categories, 'New category'), color: Model.TAG_COLORS[p.categories.length % Model.TAG_COLORS.length] });
@@ -1071,12 +1076,16 @@ function openLabels() {
     const others = p.categories.filter(x => x !== c), n = uses('category', c.id);
     const target = h('select', {}, others.map(o => h('option', { value: o.id }, o.name)));
     syncDialog = null;
+    const isDefault = Model.defaultCategory(p) === c;
     showDialog(
       h('h2', {}, `Delete category "${c.name}"?`),
-      n ? [h('p', {}, `${n} card(s) use it. Move them to:`), target] : h('p', {}, 'No cards use it.'),
+      n || isDefault ? [h('p', {}, (n ? `${n} card(s) use it. ` : '') + (isDefault ? 'It is the default for new cards. ' : '') +
+        (n ? 'Move them to' : 'Make this the default instead') + (n && isDefault ? ', which also becomes the default:' : ':')), target] : h('p', {}, 'No cards use it.'),
       buttons(h('button', { onclick: draw }, 'Cancel'),
         h('button', { class: 'danger', onclick: () => {
-          for (const t of p.tasks) if (t.categoryId === c.id) t.categoryId = target.value || others[0].id;
+          const to = target.value || others[0].id;
+          for (const t of p.tasks) if (t.categoryId === c.id) t.categoryId = to;
+          if (isDefault) p.defaultCategoryId = to;
           p.categories = p.categories.filter(x => x !== c);
           save(); render(); draw();
         } }, 'Delete')));

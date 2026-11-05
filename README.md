@@ -19,7 +19,7 @@ Deleted cards, stages, major phases, projects and attachments go to **Recently d
 
 ### Cards
 
-- **Category** (required): each project has its own list, by default *Bugfix*, *Feature Addition*, *Optimization*, *Planning* (orange) and *Other* (grey). The category's colour is the stripe down the card's left edge. New cards start as *Feature Addition*. Edit the list under **Categories & tags**; deleting a category asks which category its cards should move to.
+- **Category** (required): each project has its own list, by default *Bugfix*, *Feature Addition*, *Optimization*, *Planning* (orange) and *Other* (grey). The category's colour is the stripe down the card's left edge. New cards get the project's **default** category, chosen under **Categories & tags** (*Feature Addition* unless changed); deleting the default category makes its replacement the new default. Edit the list under **Categories & tags**; deleting a category asks which category its cards should move to.
 - **Priority**: Urgent, High, Medium or Low.
 - **Size** (optional): Tiny, Small, Medium, Large or Huge.
 - **Tags**: up to 5 per card, from a per-project list with colours. Type a new name in a card to create a tag; a tag no card uses any more (orphaned cards count as using it) is removed automatically, so the list and filter stay tidy. Rename, recolour or delete tags under **Categories & tags** (deleting removes the tag from every card).
