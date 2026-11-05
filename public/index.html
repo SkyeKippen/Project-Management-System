@@ -129,6 +129,8 @@
   /* markdown */
   .md { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:6px 10px; min-height:40px; overflow-wrap:anywhere; }
   .md:empty::before { content:'No description'; color:var(--muted); }
+  .md.editable { cursor:text; }
+  .md.editable:hover { border-color:var(--accent); }
   .md > :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
   .md p, .md ul, .md ol, .md pre, .md blockquote { margin:6px 0; }
   .md h3, .md h4, .md h5, .md h6 { margin:8px 0 4px; }
@@ -199,26 +201,45 @@ let currentId = store.get('currentProject');
 // save() sends diff(base, state) as ops. Every new server state, whether from our own save or someone else's,
 // is folded in with diff(base, server) applied to `state` in place, so unsent local edits and the objects an
 // open dialog is holding on to survive.
-let base = null, baseVersion = 0, saveTimer, sending = false, trashCount = 0;
+let base = null, baseVersion = 0, saveTimer, sending = false, sentState = null, trashCount = 0;
 function save() { checkpoint(); clearTimeout(saveTimer); saveTimer = setTimeout(flush, 120); }
 async function flush() {
   if (sending || !base) return;
   const ops = Sync.diff(base, state);
   if (!ops.length) return;
   sending = true;
+  sentState = Sync.clone(state);
   let ok = false;
   try {
     const r = await fetch('/api/ops', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ops }) });
-    if (r.ok) { receive(await r.json()); ok = true; }
+    if (r.ok) { receive(await r.json()); settle(); ok = true; }
   } catch {}
   sending = false;
   if (ok) flush(); else { setStatus(false); setTimeout(flush, 2000); }  // unsent edits stay in `state` and are retried
 }
+const editedFields = since => new Set(Sync.diff(since, state).filter(o => o.op === 'set').map(o => JSON.stringify([o.path, o.key])));
+const exceptEdited = (ops, edited) => ops.filter(o => o.op !== 'set' || !edited.has(JSON.stringify([o.path, o.key])));
+// The server may have corrected or refused part of what was sent (e.g. a tag deleted a moment ago), leaving its state
+// as it was. Whatever was sent and not edited since takes the server's value, or it would be resent forever.
+function settle() {
+  const ops = exceptEdited(Sync.diff(sentState, base), editedFields(sentState));
+  if (!ops.length) return;
+  Sync.apply(state, ops); Sync.apply(undoSnap, ops);
+  renderSoon();
+  if (syncDialog) syncDialog();
+}
 function receive({ version, state: remote, trashCount: n }) {
   if (n !== undefined) { trashCount = n; document.getElementById('bin').textContent = `Recently deleted (${n})`; }
   if (version <= baseVersion) return;
-  if (state) { const ops = Sync.diff(base, remote); Sync.apply(state, ops); Sync.apply(undoSnap, ops); }
-  else { state = Sync.clone(remote); undoSnap = Sync.clone(remote); }
+  if (state) {
+    // A field edited since the last send keeps its local value: the server's state can't include that edit yet
+    // (it may just be the reply to an earlier keystroke), and the edit goes out next. What was already sent is
+    // not protected, so the server's decision on it stands.
+    const ops = exceptEdited(Sync.diff(base, remote), editedFields(sending ? sentState : base));
+    Sync.apply(state, ops); Sync.apply(undoSnap, ops);
+    // other people's changes arriving mid-send aren't this user's edits
+    if (sending) Sync.apply(sentState, ops);
+  } else { state = Sync.clone(remote); undoSnap = Sync.clone(remote); }
   base = remote; baseVersion = version;
   renderSoon();
   if (syncDialog) syncDialog();
@@ -826,9 +847,13 @@ function openTask(t) {
   const title = h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } });
   const desc = h('textarea', { rows: 6, value: t.description, placeholder: 'Markdown supported: **bold**, *italic*, `code`, - lists, [links](https://…)',
     oninput: e => { t.description = e.target.value; save(); } });
-  const preview = h('div', { class: 'md' });
   let editing = !t.description;
-  const modeBtn = h('button', { class: 'link', onclick: () => { editing = !editing; drawDesc(); if (editing) desc.focus(); } });
+  const setEditing = on => { editing = on; drawDesc(); if (on) desc.focus(); };
+  // the rendered description opens the editor when clicked, unless following a link or selecting text to copy
+  const preview = h('div', { class: 'md editable', title: 'Click to edit', tabIndex: 0, role: 'button',
+    onclick: e => { if (!e.target.closest('a') && !String(getSelection())) setEditing(true); },
+    onkeydown: e => { if (e.key === 'Enter' && !e.target.closest('a')) { e.preventDefault(); setEditing(true); } } });
+  const modeBtn = h('button', { onclick: () => setEditing(!editing) });
   const drawDesc = () => {
     preview.innerHTML = Markdown.render(t.description);  // Markdown.render escapes all text: safe to insert
     desc.hidden = !editing; preview.hidden = editing;
