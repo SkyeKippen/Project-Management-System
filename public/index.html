@@ -105,6 +105,7 @@
   #modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:flex-start; justify-content:center; padding-top:5vh; }
   #modal.open { display:flex; }
   .dialog { background:var(--bg); border-radius:8px; width:min(600px, 94vw); max-height:90vh; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .dialog.card-view { width:min(900px, 95vw); }
   .dialog.files-over { outline:2px dashed var(--accent); }
   .dialog label { font-size:12px; color:var(--muted); display:block; margin-bottom:2px; }
   .dialog input, .dialog textarea, .dialog select { width:100%; }
@@ -713,6 +714,7 @@ let syncDialog = null;
 function closeModal() { syncDialog = null; modal.classList.remove('open'); dialog.classList.remove('files-over'); render(); }
 function showDialog(...kids) {
   dialog.ondragover = dialog.ondragleave = dialog.ondrop = null;  // a task dialog sets these for file drops
+  dialog.classList.remove('card-view');  // and is wider than the other dialogs
   dialog.replaceChildren(...kids.flat().filter(k => k != null)); modal.classList.add('open');
 }
 const buttons = (...b) => h('div', { class: 'row', style: 'justify-content:flex-end' }, ...b);
@@ -934,6 +936,7 @@ function openTask(t) {
         h('button', { onclick: () => { if (confirm('Delete this task? It stays in Recently deleted for 30 days.')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
         archiveBtn),
       h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done')));
+  dialog.classList.add('card-view');
   // drop handlers live on the whole dialog while it shows this task
   Object.entries(fileDrop).forEach(([k, f]) => { dialog[k] = f; });
 
