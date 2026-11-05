@@ -12,7 +12,8 @@
     { name: 'Planning', color: '#f76b15' },
     { name: 'Other', color: '#8b8d98' },
   ];
-  const TAG_COLORS = ['#3e7bfa', '#30a46c', '#e5484d', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#6e7781'];
+  const DECISION_STATUSES = ['proposed', 'accepted', 'rejected', 'superseded'];
+  const TAG_COLORS =['#3e7bfa', '#30a46c', '#e5484d', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#6e7781'];
 
   const newCategories = uid => DEFAULT_CATEGORIES.map(c => ({ id: uid(), ...c }));
   const defaultCategory = p => p.categories.find(c => c.name === DEFAULT_CATEGORY) || p.categories[0];
@@ -45,6 +46,19 @@
       fix(!Array.isArray(t.comments), () => { t.comments = []; });
       // an assignee who was deleted (perhaps at the same moment) leaves the card or step unassigned
       for (const x of [t, ...t.steps]) fix('assigneeId' in x && !personIds.has(x.assigneeId), () => { delete x.assigneeId; });
+    }
+    // decisions log
+    fix(!Array.isArray(p.decisions), () => { p.decisions = []; });
+    for (const d of p.decisions) {
+      fix(!DECISION_STATUSES.includes(d.status), () => { d.status = 'proposed'; });
+      for (const k of ['title', 'summary', 'body']) fix(typeof d[k] !== 'string', () => { d[k] = ''; });
+      fix(d.date !== '' && !/^\d{4}-\d\d-\d\d$/.test(d.date), () => { d.date = ''; });
+      for (const k of ['deciders', 'cardIds', 'history', 'comments', 'attachments']) fix(!Array.isArray(d[k]), () => { d[k] = []; });
+      const deciders = [...new Set(d.deciders.filter(id => personIds.has(id)))];
+      fix(deciders.length !== d.deciders.length, () => { d.deciders = deciders; });
+      // links to cards and older decisions are kept even if those are deleted, so restoring them from the bin
+      // restores the link too; the page only shows links to things that exist
+      fix('supersedes' in d && (typeof d.supersedes !== 'string' || d.supersedes === d.id), () => { delete d.supersedes; });
     }
     // a tag no card uses any more (orphaned cards count) is removed, to keep the tag list and filter bar tidy
     const used = new Set(p.tasks.flatMap(t => t.tags));

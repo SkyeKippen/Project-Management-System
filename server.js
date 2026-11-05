@@ -122,8 +122,11 @@ let version = Date.now();
 fs.mkdirSync(UPLOADS, { recursive: true });
 // a file stays on disk while the board or the bin refers to it
 const taskFiles = tasks => (tasks || []).flatMap(t => (t.attachments || []).map(a => a.id));
-const entryFiles = e => e.kind === 'attachment' ? [e.item.id] : e.kind === 'task' ? taskFiles([e.item]) : e.kind === 'project' ? taskFiles(e.item.tasks) : taskFiles(e.tasks);
-const attachmentIds = () => new Set([...state.projects.flatMap(p => taskFiles(p.tasks)), ...trash.flatMap(entryFiles)]);
+// (decisions hold attachments the same way cards do)
+const projectFiles = p => taskFiles([...(p.tasks || []), ...(p.decisions || [])]);
+const entryFiles = e => e.kind === 'attachment' ? [e.item.id] : e.kind === 'task' || e.kind === 'decision' ? taskFiles([e.item])
+  : e.kind === 'project' ? projectFiles(e.item) : taskFiles(e.tasks);
+const attachmentIds = () => new Set([...state.projects.flatMap(projectFiles), ...trash.flatMap(entryFiles)]);
 function removeFiles(ids) {
   for (const id of ids) for (const f of [id, id + '.json']) fs.rm(path.join(UPLOADS, f), { force: true }, () => {});
 }
@@ -207,6 +210,12 @@ function captureDeletions(before, after) {
       const ta = tasksAfter.get(tb.id);
       if (ta) for (const a of tb.attachments) if (!ta.attachments.some(x => x.id === a.id)) add({ ...base, kind: 'attachment', name: a.name, from: tb.title, taskId: tb.id, item: a });
     }
+    const decisionsAfter = new Map(pa.decisions.map(d => [d.id, d]));
+    pb.decisions.forEach((d, index) => {
+      const da = decisionsAfter.get(d.id);
+      if (!da) return add({ ...base, kind: 'decision', name: d.title || 'Untitled decision', from: d.date, index, item: d });
+      for (const a of d.attachments) if (!da.attachments.some(x => x.id === a.id)) add({ ...base, kind: 'attachment', name: a.name, from: d.title, decisionId: d.id, item: a });
+    });
   }
 }
 // an entry whose item is back on the board (e.g. someone used Undo) has nothing left to restore
@@ -216,7 +225,8 @@ function reconcileTrash() {
     if (!p) return false;
     if (e.kind === 'project') return true;
     if (e.kind === 'task') return p.tasks.some(t => t.id === e.item.id);
-    if (e.kind === 'attachment') return p.tasks.some(t => t.attachments.some(a => a.id === e.item.id));
+    if (e.kind === 'attachment') return [...p.tasks, ...p.decisions].some(t => t.attachments.some(a => a.id === e.item.id));
+    if (e.kind === 'decision') return p.decisions.some(d => d.id === e.item.id);
     if (e.kind === 'major') return p.majorPhases.some(m => m.id === e.item.id);
     return p.majorPhases.some(m => m.stages.some(s => s.id === e.item.id));
   };
@@ -270,6 +280,18 @@ function restoreEntry(id) {
     if (!m) { m = p.majorPhases[0]; if (!m) { m = { id: uid(), name: 'Restored', stages: [] }; p.majorPhases.push(m); } }
     if (!m.stages.some(s => s.id === e.item.id)) insertAt(m.stages, e.index, e.item);
     addBack(p, e);
+  } else if (e.kind === 'decision') {
+    if (!p.decisions.some(d => d.id === e.item.id)) insertAt(p.decisions, e.index, e.item);
+  } else if (e.kind === 'attachment' && e.decisionId) {
+    let d = p.decisions.find(x => x.id === e.decisionId);
+    if (!d) {
+      // the decision was deleted after the attachment: bring it back as well
+      const parent = trash.find(x => x.kind === 'decision' && x.item.id === e.decisionId);
+      if (!parent) { trash.unshift(e); throw new RestoreError(`Its decision "${e.from}" has been permanently deleted.`); }
+      restoreEntry(parent.id);
+      d = p.decisions.find(x => x.id === e.decisionId);
+    }
+    if (d && !d.attachments.some(a => a.id === e.item.id)) d.attachments.push(e.item);
   } else if (e.kind === 'attachment') {
     let t = p.tasks.find(x => x.id === e.taskId);
     if (!t) {

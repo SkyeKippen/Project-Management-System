@@ -11,9 +11,19 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 
 Tick **Done stage** on any stage (one or more per major phase; stages named "Done" start ticked). Each major phase tab shows its progress: cards in done stages, plus archived cards, as a share of all its cards. Archive a card from its dialog, or everything showing in a done stage with **Archive all**. Archived cards leave the board and appear under the **Archived** tab, where opening one lets you unarchive it back to its stage.
 
+### Decisions log
+
+Each project has a **Decisions** tab for recording decisions in detail. Decisions have no numbers; they are known by title and date.
+
+- A decision has a title, status (Proposed, Accepted, Rejected or Superseded), decision date, the people who decided, a short summary, and a full Markdown write-up that starts from a template (Context, Options considered, Decision, Rationale, Consequences / follow-ups). The write-up opens in a wide view and is edited like card descriptions.
+- **History**: each time someone finishes editing the write-up (Preview, or closing the decision), the text is kept as a version with their name and the time. Versions can be viewed and restored, and restoring keeps the current text in the history too.
+- **Links**: link a decision to any cards in the project, from either side; a card's dialog lists its decisions. A decision can **supersede** an older one, which marks the older one Superseded and shows it a banner pointing to the new one.
+- Comments and attachments work as they do on cards. Deleted decisions go to Recently deleted, and undo covers them.
+- The list is sorted by decision date, oldest first, then by title. Filter it by status, or search titles, summaries and write-ups. These choices are per viewer.
+
 ### Recently deleted and undo
 
-Deleted cards, stages, major phases, projects and attachments go to **Recently deleted** for 30 days, along with any attachment files. **Restore** puts an item back where it was. If its parent has gone too, the parent is restored with it where possible; a card whose stage no longer exists returns to Orphaned cards. **Delete forever** removes it immediately, and anything older than 30 days is removed automatically.
+Deleted cards, stages, major phases, decisions, projects and attachments go to **Recently deleted** for 30 days, along with any attachment files. **Restore** puts an item back where it was. If its parent has gone too, the parent is restored with it where possible; a card whose stage no longer exists returns to Orphaned cards. **Delete forever** removes it immediately, and anything older than 30 days is removed automatically.
 
 **Undo** (the header button, the prompt after a change, or Ctrl+Z outside a text field) reverses your own recent changes in this browser, and everyone sees the result. If someone else has since changed the same thing, that part is left alone and you're told. The undo history is lost when the page is reloaded.
 

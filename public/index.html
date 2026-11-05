@@ -42,6 +42,19 @@
   /* bin */
   .bin-text { flex:1; min-width:0; overflow-wrap:anywhere; }
   .bin-item button { flex:none; white-space:nowrap; }
+  /* decisions log */
+  .decisions { display:flex; flex-direction:column; gap:12px; max-width:1100px; }
+  .decision-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .decision-row { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--s, var(--line)); border-radius:4px; padding:8px 12px; cursor:pointer; }
+  .decision-row:hover { border-color:var(--accent); }
+  .decision-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; overflow-wrap:anywhere; }
+  .deciders { display:flex; gap:2px; }
+  .status { --s:#8b8d98; }
+  .status.proposed { --s:#f5a524; } .status.accepted { --s:#30a46c; } .status.rejected { --s:#e5484d; } .status.superseded { --s:#8b8d98; }
+  .badge.status { border-color:var(--s); color:var(--text); background:color-mix(in srgb, var(--s) 18%, transparent); }
+  button.chip.status { --c:var(--s); }
+  .banner { background:color-mix(in srgb, #8b8d98 18%, transparent); border:1px solid #8b8d98; border-radius:4px; padding:6px 10px; }
+  .banner[hidden] { display:none; }
   #status.live { color:var(--ok); }
   #status.offline { color:var(--muted); }
   /* major phase tabs */
@@ -106,6 +119,8 @@
   #modal.open { display:flex; }
   .dialog { background:var(--bg); border-radius:8px; width:min(600px, 94vw); max-height:90vh; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .dialog.card-view { width:min(900px, 95vw); }
+  .dialog.decision-view { width:min(1100px, 96vw); max-height:94vh; }
+  .dialog.decision-view textarea[rows="22"] { font-family:ui-monospace, Consolas, monospace; font-size:13px; }
   .dialog.files-over { outline:2px dashed var(--accent); }
   .dialog label { font-size:12px; color:var(--muted); display:block; margin-bottom:2px; }
   .dialog input, .dialog textarea, .dialog select { width:100%; }
@@ -260,7 +275,7 @@ const undoTarget = (root, op) => {
 function describeChange(forward) {
   const last = o => o.path[o.path.length - 1];
   const removed = forward.find(o => o.op === 'remove'), added = forward.find(o => o.op === 'insert');
-  const names = { tasks: 'Card', stages: 'Stage', majorPhases: 'Major phase', projects: 'Project', attachments: 'Attachment', steps: 'Step', comments: 'Comment' };
+  const names = { tasks: 'Card', stages: 'Stage', majorPhases: 'Major phase', projects: 'Project', attachments: 'Attachment', steps: 'Step', comments: 'Comment', decisions: 'Decision' };
   if (removed && names[last(removed)]) return `${names[last(removed)]} deleted`;
   if (added && names[last(added)]) return `${names[last(added)]} added`;
   if (forward.some(o => o.key === 'archived')) return 'Card archived';
@@ -362,7 +377,8 @@ const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
 // selected view per project: a major phase id, or ORPHANS/ARCHIVED for those pages
-const ORPHANS = 'orphans', ARCHIVED = 'archived';
+const ORPHANS = 'orphans', ARCHIVED = 'archived', DECISIONS = 'decisions';
+const showingDecisions = () => store.get(viewKey(project())) === DECISIONS;
 const viewKey = p => 'currentMajor:' + p.id;
 const showingOrphans = () => store.get(viewKey(project())) === ORPHANS;
 const showingArchived = () => store.get(viewKey(project())) === ARCHIVED;
@@ -486,13 +502,18 @@ function render() {
   const tabs = document.getElementById('tabs'), filters = document.getElementById('filters'), board = document.getElementById('board');
   const p = project();
   if (!p) { tabs.replaceChildren(); filters.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
-  const orphans = showingOrphans(), archived = showingArchived(), mp = orphans || archived ? null : currentMajor();
+  const orphans = showingOrphans(), archived = showingArchived(), decisions = showingDecisions();
+  const mp = orphans || archived || decisions ? null : currentMajor();
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
     h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'),
     orphanTabEl(p, orphans),
     h('div', { class: 'tab' + (archived ? ' active' : ''), title: 'Archived cards', onclick: () => { if (!archived) { setView(ARCHIVED); render(); } } },
-      h('span', { class: 'name' }, 'Archived'), h('span', { class: 'count' }, archivedOf(p).length)));
+      h('span', { class: 'name' }, 'Archived'), h('span', { class: 'count' }, archivedOf(p).length)),
+    h('div', { class: 'tab' + (decisions ? ' active' : ''), title: 'Decisions log', onclick: () => { if (!decisions) { setView(DECISIONS); render(); } } },
+      h('span', { class: 'name' }, 'Decisions'), h('span', { class: 'count' }, p.decisions.length)));
+  // the card filters don't apply to the decisions log, which has its own
+  if (decisions) { filters.replaceChildren(); board.replaceChildren(decisionsPage(p)); return; }
   renderFilters(p, filters);
 
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
@@ -732,10 +753,14 @@ modal.addEventListener('mousedown', e => { if (e.target === modal) closeModal();
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 // set while a dialog is open: refreshes it when someone else changes the board
 let syncDialog = null;
-function closeModal() { syncDialog = null; modal.classList.remove('open'); dialog.classList.remove('files-over'); render(); }
+// set by a dialog that must do something as it goes away (e.g. keep a version of a decision being edited)
+let onDialogClose = null;
+const leaveDialog = () => { const f = onDialogClose; onDialogClose = null; if (f) f(); };
+function closeModal() { leaveDialog(); syncDialog = null; modal.classList.remove('open'); dialog.classList.remove('files-over'); render(); }
 function showDialog(...kids) {
+  leaveDialog();
   dialog.ondragover = dialog.ondragleave = dialog.ondrop = null;  // a task dialog sets these for file drops
-  dialog.classList.remove('card-view');  // and is wider than the other dialogs
+  dialog.classList.remove('card-view', 'decision-view');  // and those are wider than the other dialogs
   dialog.replaceChildren(...kids.flat().filter(k => k != null)); modal.classList.add('open');
 }
 const buttons = (...b) => h('div', { class: 'row', style: 'justify-content:flex-end' }, ...b);
@@ -757,7 +782,29 @@ function confirmDelete(what, holds, nCards, onConfirm) {
 // files dropped outside the attachment area shouldn't make the browser navigate away
 for (const ev of ['dragover', 'drop']) window.addEventListener(ev, e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
 
-async function uploadFiles(p, t, files, status, redraw) {
+// ---------- sections shared by the card and decision dialogs ----------
+// Markdown text shown rendered; clicking it (except a link or a text selection) or Edit opens the editor.
+// onEditEnd(before) runs when an editing session that changed the text ends: Preview, or the dialog closing.
+function markdownField({ get, set, rows = 6, placeholder, onEditEnd }) {
+  const area = h('textarea', { rows, value: get(), placeholder, oninput: e => { set(e.target.value); save(); } });
+  let editing = !get(), before = get();
+  const finish = () => { if (editing && onEditEnd && get() !== before) onEditEnd(before); before = get(); };
+  const setEditing = on => { if (!on) finish(); editing = on; before = get(); draw(); if (on) area.focus(); };
+  const preview = h('div', { class: 'md editable', title: 'Click to edit', tabIndex: 0, role: 'button',
+    onclick: e => { if (!e.target.closest('a') && !String(getSelection())) setEditing(true); },
+    onkeydown: e => { if (e.key === 'Enter' && !e.target.closest('a')) { e.preventDefault(); setEditing(true); } } });
+  const modeBtn = h('button', { onclick: () => setEditing(!editing) });
+  const draw = () => {
+    preview.innerHTML = Markdown.render(get());  // Markdown.render escapes all text: safe to insert
+    area.hidden = !editing; preview.hidden = editing;
+    modeBtn.textContent = editing ? 'Preview' : 'Edit';
+  };
+  draw();
+  return { area, preview, modeBtn, finish,
+    refresh: () => { if (document.activeElement !== area) area.value = get(); draw(); } };
+}
+
+async function uploadFiles(owner, alive, files, status, redraw) {
   for (const f of files) {
     status.textContent = `Uploading ${f.name}…`;
     try {
@@ -765,8 +812,8 @@ async function uploadFiles(p, t, files, status, redraw) {
         headers: { 'Content-Type': f.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(f.name) } });
       if (!r.ok) throw new Error(r.status === 413 ? 'the file is too large' : 'upload failed');
       const a = await r.json();
-      if (!p.tasks.includes(t)) return;
-      t.attachments.push({ id: a.id, name: a.name, size: a.size, type: a.type, uploadedAt: a.uploadedAt });
+      if (!alive()) return;
+      owner.attachments.push({ id: a.id, name: a.name, size: a.size, type: a.type, uploadedAt: a.uploadedAt });
       save(); redraw();
       status.textContent = '';
     } catch (err) {
@@ -776,8 +823,96 @@ async function uploadFiles(p, t, files, status, redraw) {
   }
 }
 
+// attachments of a card or decision; files can also be dropped anywhere on the dialog (see dropHandlers)
+function attachmentsSection(owner, alive) {
+  const list = h('div', { class: 'list' }), status = h('p', { class: 'count' });
+  const picker = h('input', { type: 'file', multiple: true, hidden: true,
+    onchange: e => { uploadFiles(owner, alive, [...e.target.files], status, draw); e.target.value = ''; } });
+  const draw = () => {
+    list.replaceChildren(...owner.attachments.map(a => {
+      const href = `/files/${a.id}/${encodeURIComponent(a.name)}`;
+      return h('div', { class: 'file' },
+        /^image\/(png|jpeg|gif|webp)$/.test(a.type) ? h('img', { src: href, alt: '' }) : h('span', {}, '📄'),
+        h('a', { href, download: a.name, title: a.name }, a.name),
+        h('span', { class: 'count' }, fmtSize(a.size)),
+        h('button', { class: 'link', title: 'Delete attachment', onclick: () => {
+          if (!confirm(`Delete attachment "${a.name}"?`)) return;
+          owner.attachments = owner.attachments.filter(x => x.id !== a.id); save(); draw(); } }, '✕'));
+    }));
+  };
+  draw();
+  const dropHandlers = {
+    ondragover: e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); dialog.classList.add('files-over'); } },
+    ondragleave: e => { if (!dialog.contains(e.relatedTarget)) dialog.classList.remove('files-over'); },
+    ondrop: e => {
+      if (!e.dataTransfer.files.length) return;
+      e.preventDefault(); dialog.classList.remove('files-over');
+      uploadFiles(owner, alive, [...e.dataTransfer.files], status, draw);
+    },
+  };
+  const el = h('div', {},
+    h('div', { class: 'field-head' }, h('label', {}, 'Attachments'), h('button', { class: 'link', onclick: () => picker.click() }, '+ Attach files')),
+    list, status, picker, h('p', { class: 'hint', style: 'padding:0' }, 'Or drop files onto this dialog.'));
+  return { el, refresh: draw, dropHandlers };
+}
+
+// comments of a card or decision: anyone can read, and people edit or delete their own
+function commentsSection(owner) {
+  const box = h('div', { class: 'list' }), count = h('span', { class: 'count' }), hint = h('p', { class: 'hint', style: 'padding:0' });
+  let editingComment = null;
+  const authorOf = c => personById(c.authorId) || { id: c.authorId || 'unknown', name: c.authorName || 'Unknown' };
+  const draw = () => {
+    box.replaceChildren(...owner.comments.map(c => {
+      const author = authorOf(c), mine = me()?.id === c.authorId, editing = editingComment === c.id;
+      const head = h('div', { class: 'comment-head' }, avatar(author), h('strong', {}, author.name),
+        h('span', { class: 'count' }, fmtWhen(c.at) + (c.editedAt ? ' (edited)' : '')),
+        mine && !editing ? h('span', { class: 'comment-tools' },
+          h('button', { class: 'link', onclick: () => { editingComment = c.id; draw(); } }, 'Edit'),
+          h('button', { class: 'link', onclick: () => { if (confirm('Delete this comment?')) { owner.comments = owner.comments.filter(x => x !== c); save(); draw(); } } }, 'Delete')) : null);
+      if (editing) {
+        const area = h('textarea', { rows: 3, value: c.text });
+        return h('div', { class: 'comment' }, head, area, buttons(
+          h('button', { onclick: () => { editingComment = null; draw(); } }, 'Cancel'),
+          h('button', { class: 'primary', onclick: () => {
+            const text = area.value.trim();
+            if (text && text !== c.text) { c.text = text; c.editedAt = new Date().toISOString(); save(); }
+            editingComment = null; draw(); } }, 'Save')));
+      }
+      const body = h('div', { class: 'md comment-body' });
+      body.innerHTML = Markdown.render(c.text);  // Markdown.render escapes all text: safe to insert
+      return h('div', { class: 'comment' }, head, body);
+    }));
+    count.textContent = owner.comments.length ? String(owner.comments.length) : '';
+    const who = me();
+    postBtn.disabled = composer.disabled = !who;
+    hint.textContent = who ? '' : 'Choose who you are at the top of the page to comment.';
+    hint.hidden = !!who;
+  };
+  const post = () => {
+    const text = composer.value.trim(), who = me();
+    if (!text || !who) return;
+    owner.comments.push({ id: uid(), authorId: who.id, authorName: who.name, text, at: new Date().toISOString() });
+    composer.value = ''; save(); draw();
+  };
+  const composer = h('textarea', { rows: 2, placeholder: 'Write a comment (Markdown supported). Ctrl+Enter to post.',
+    onkeydown: e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) post(); } });
+  const postBtn = h('button', { onclick: post }, 'Comment');
+  draw();
+  const el = h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Comments'), count), box, composer, hint,
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:4px' }, postBtn));
+  return { el, refresh: () => { if (!el.contains(document.activeElement)) draw(); } };
+}
+
+const fmtWhen = iso => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const deletedNotice = (what, name) => {
+  syncDialog = null;
+  showDialog(h('h2', {}, `This ${what} was deleted`), h('p', {}, `"${name}" is in Recently deleted for 30 days.`),
+    buttons(h('button', { class: 'primary', onclick: closeModal }, 'Close')));
+};
+
 function openTask(t) {
   const p = project();
+  const alive = () => state.projects.includes(p) && p.tasks.includes(t);
 
   // steps
   const stepsBox = h('div', { class: 'list' });
@@ -843,99 +978,34 @@ function openTask(t) {
     tagCount.textContent = `${t.tags.length}/${Model.MAX_TAGS}`;
   };
 
-  // description: Markdown, rendered unless editing
   const title = h('input', { value: t.title, style: 'font-size:16px;font-weight:600', oninput: e => { t.title = e.target.value; save(); } });
-  const desc = h('textarea', { rows: 6, value: t.description, placeholder: 'Markdown supported: **bold**, *italic*, `code`, - lists, [links](https://…)',
-    oninput: e => { t.description = e.target.value; save(); } });
-  let editing = !t.description;
-  const setEditing = on => { editing = on; drawDesc(); if (on) desc.focus(); };
-  // the rendered description opens the editor when clicked, unless following a link or selecting text to copy
-  const preview = h('div', { class: 'md editable', title: 'Click to edit', tabIndex: 0, role: 'button',
-    onclick: e => { if (!e.target.closest('a') && !String(getSelection())) setEditing(true); },
-    onkeydown: e => { if (e.key === 'Enter' && !e.target.closest('a')) { e.preventDefault(); setEditing(true); } } });
-  const modeBtn = h('button', { onclick: () => setEditing(!editing) });
-  const drawDesc = () => {
-    preview.innerHTML = Markdown.render(t.description);  // Markdown.render escapes all text: safe to insert
-    desc.hidden = !editing; preview.hidden = editing;
-    modeBtn.textContent = editing ? 'Preview' : 'Edit';
-  };
-
-  // attachments
-  const fileList = h('div', { class: 'list' }), uploadStatus = h('p', { class: 'count' });
-  const picker = h('input', { type: 'file', multiple: true, hidden: true,
-    onchange: e => { uploadFiles(p, t, [...e.target.files], uploadStatus, drawFiles); e.target.value = ''; } });
-  const drawFiles = () => {
-    fileList.replaceChildren(...t.attachments.map(a => {
-      const href = `/files/${a.id}/${encodeURIComponent(a.name)}`;
-      return h('div', { class: 'file' },
-        /^image\/(png|jpeg|gif|webp)$/.test(a.type) ? h('img', { src: href, alt: '' }) : h('span', {}, '📄'),
-        h('a', { href, download: a.name, title: a.name }, a.name),
-        h('span', { class: 'count' }, fmtSize(a.size)),
-        h('button', { class: 'link', title: 'Delete attachment', onclick: () => {
-          if (!confirm(`Delete attachment "${a.name}"?`)) return;
-          t.attachments = t.attachments.filter(x => x.id !== a.id); save(); drawFiles(); } }, '✕'));
-    }));
-  };
-  const fileDrop = {
-    ondragover: e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); dialog.classList.add('files-over'); } },
-    ondragleave: e => { if (!dialog.contains(e.relatedTarget)) dialog.classList.remove('files-over'); },
-    ondrop: e => {
-      if (!e.dataTransfer.files.length) return;
-      e.preventDefault(); dialog.classList.remove('files-over');
-      uploadFiles(p, t, [...e.dataTransfer.files], uploadStatus, drawFiles);
-    },
-  };
+  const desc = markdownField({ get: () => t.description, set: v => { t.description = v; },
+    placeholder: 'Markdown supported: **bold**, *italic*, `code`, - lists, [links](https://…)' });
+  const files = attachmentsSection(t, alive), comments = commentsSection(t);
   const from = h('p', { class: 'from' });
   const showFrom = () => { from.textContent = t.orphanedFrom ? 'Orphaned from: ' + t.orphanedFrom : ''; from.hidden = !t.orphanedFrom; };
 
-  // comments: anyone can read, and people edit or delete their own
-  const commentsBox = h('div', { class: 'list' });
-  let editingComment = null;
-  const authorOf = c => personById(c.authorId) || { id: c.authorId || 'unknown', name: c.authorName || 'Unknown' };
-  const drawComments = () => {
-    commentsBox.replaceChildren(...t.comments.map(c => {
-      const author = authorOf(c), mine = me()?.id === c.authorId, editing = editingComment === c.id;
-      const head = h('div', { class: 'comment-head' }, avatar(author), h('strong', {}, author.name),
-        h('span', { class: 'count' }, new Date(c.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + (c.editedAt ? ' (edited)' : '')),
-        mine && !editing ? h('span', { class: 'comment-tools' },
-          h('button', { class: 'link', onclick: () => { editingComment = c.id; drawComments(); } }, 'Edit'),
-          h('button', { class: 'link', onclick: () => { if (confirm('Delete this comment?')) { t.comments = t.comments.filter(x => x !== c); save(); drawComments(); } } }, 'Delete')) : null);
-      if (editing) {
-        const box = h('textarea', { rows: 3, value: c.text });
-        return h('div', { class: 'comment' }, head, box, buttons(
-          h('button', { onclick: () => { editingComment = null; drawComments(); } }, 'Cancel'),
-          h('button', { class: 'primary', onclick: () => {
-            const text = box.value.trim();
-            if (text && text !== c.text) { c.text = text; c.editedAt = new Date().toISOString(); save(); }
-            editingComment = null; drawComments(); } }, 'Save')));
-      }
-      const body = h('div', { class: 'md comment-body' });
-      body.innerHTML = Markdown.render(c.text);  // Markdown.render escapes all text: safe to insert
-      return h('div', { class: 'comment' }, head, body);
-    }));
-    commentCount.textContent = t.comments.length ? String(t.comments.length) : '';
-  };
-  const commentCount = h('span', { class: 'count' }), commentHint = h('p', { class: 'hint', style: 'padding:0' });
-  const post = () => {
-    const text = composer.value.trim(), who = me();
-    if (!text || !who) return;
-    t.comments.push({ id: uid(), authorId: who.id, authorName: who.name, text, at: new Date().toISOString() });
-    composer.value = ''; save(); drawComments();
-  };
-  const composer = h('textarea', { rows: 2, placeholder: 'Write a comment (Markdown supported). Ctrl+Enter to post.',
-    onkeydown: e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) post(); } });
-  const postBtn = h('button', { onclick: post }, 'Comment');
-  const showWho = () => {
-    const who = me();
-    postBtn.disabled = composer.disabled = !who;
-    commentHint.textContent = who ? '' : 'Choose who you are at the top of the page to comment.';
-    commentHint.hidden = !!who;
+  // decisions that link to this card, and linking another
+  const decisionsBox = h('div', { class: 'list' });
+  const linkDecision = h('select', { onchange: e => {
+      const d = p.decisions.find(x => x.id === e.target.value);
+      if (d && !d.cardIds.includes(t.id)) { d.cardIds.push(t.id); save(); }
+      drawDecisions(); } });
+  const drawDecisions = () => {
+    const linked = decisionsFor(p, t);
+    decisionsBox.replaceChildren(...linked.map(d => h('div', { class: 'item decision-link' },
+      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => openDecision(d) }, decisionLabel(d)), statusChip(d),
+      h('button', { class: 'link', title: 'Unlink', onclick: () => { d.cardIds = d.cardIds.filter(id => id !== t.id); save(); drawDecisions(); } }, '✕'))));
+    const others = sortedDecisions(p).filter(d => !linked.includes(d));
+    linkDecision.replaceChildren(h('option', { value: '' }, others.length ? '+ Link a decision…' : 'No other decisions to link'),
+      ...others.map(d => h('option', { value: d.id }, decisionLabel(d))));
+    linkDecision.disabled = !others.length;
   };
 
   const archiveBtn = h('button', { onclick: () => { setArchived(t, !t.archived); save(); closeModal(); } });
   const showArchive = () => { archiveBtn.textContent = t.archived ? 'Unarchive' : 'Archive'; };
 
-  drawSteps(); drawTags(); drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee(); drawComments(); showWho(); showArchive();
+  drawSteps(); drawTags(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions();
   showDialog(
     title,
     h('div', { class: 'row' },
@@ -947,15 +1017,11 @@ function openTask(t) {
       h('div', {}, h('label', {}, 'Assignee'), h('div', { class: 'person-pick' }, assigneeAvatar, assignee))),
     from,
     h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Tags'), tagCount), tagBox, tagList),
-    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Description'), modeBtn), desc, preview),
-    h('div', {},
-      h('div', { class: 'field-head' }, h('label', {}, 'Attachments'),
-        h('button', { class: 'link', onclick: () => picker.click() }, '+ Attach files')),
-      fileList, uploadStatus, picker,
-      h('p', { class: 'hint', style: 'padding:0' }, 'Or drop files onto this dialog.')),
+    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Description'), desc.modeBtn), desc.area, desc.preview),
+    files.el,
     h('div', {}, h('label', {}, 'Steps'), stepsBox, newStep),
-    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Comments'), commentCount), commentsBox, composer, commentHint,
-      h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:4px' }, postBtn)),
+    h('div', {}, h('label', {}, 'Decisions'), decisionsBox, linkDecision),
+    comments.el,
     h('div', { class: 'row', style: 'justify-content:space-between' },
       h('div', { class: 'row', style: 'flex:none' },
         h('button', { onclick: () => { if (confirm('Delete this task? It stays in Recently deleted for 30 days.')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
@@ -963,34 +1029,211 @@ function openTask(t) {
       h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done')));
   dialog.classList.add('card-view');
   // drop handlers live on the whole dialog while it shows this task
-  Object.entries(fileDrop).forEach(([k, f]) => { dialog[k] = f; });
+  Object.assign(dialog, files.dropHandlers);
 
   // someone else changed the board: refresh every field except the one being typed in
   syncDialog = () => {
-    if (!state.projects.includes(p) || !p.tasks.includes(t)) {
-      syncDialog = null;
-      showDialog(h('h2', {}, 'This card was deleted'), h('p', {}, `"${t.title}" is in Recently deleted for 30 days.`),
-        buttons(h('button', { class: 'primary', onclick: closeModal }, 'Close')));
-      return;
-    }
+    if (!alive()) return deletedNotice('card', t.title);
     const a = document.activeElement;
     if (a !== title) title.value = t.title;
-    if (a !== desc) desc.value = t.description;
     if (a !== prio) prio.value = t.priority;
     if (a !== size) size.value = t.size || '';
     if (a !== stageSel) stageSel.replaceChildren(...stageOptions());
     if (a !== catSel) catSel.replaceChildren(...catOptions());
     if (a !== tagInput) drawTags();
     if (!stepsBox.contains(a)) drawSteps();
-    assignee.refresh();
-    if (!commentsBox.contains(a)) drawComments();
-    drawDesc(); drawFiles(); showFrom(); showCat(); showAssignee(); showWho(); showArchive();
+    if (a !== linkDecision) drawDecisions();
+    assignee.refresh(); comments.refresh(); desc.refresh(); files.refresh();
+    showFrom(); showCat(); showAssignee(); showArchive();
   };
+}
+
+// ---------- decisions log ----------
+// Decisions have no numbers: they are known by title and date. Data: project.decisions [{ id, title, status, date,
+// deciders: [personId], summary, body, cardIds: [taskId], supersedes?: decisionId, history: [{ id, at, authorId,
+// authorName, body }], comments, attachments }]
+const DECISION_STATUSES = ['proposed', 'accepted', 'rejected', 'superseded'];
+const DECISION_TEMPLATE = '## Context\n\n\n## Options considered\n\n\n## Decision\n\n\n## Rationale\n\n\n## Consequences / follow-ups\n\n';
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const fmtDate = s => s ? new Date(s + 'T00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'no date';
+const decisionLabel = d => `${d.title || 'Untitled decision'} (${fmtDate(d.date)})`;
+const statusChip = d => h('span', { class: 'badge status ' + d.status }, cap(d.status));
+// oldest decision date first, then title A–Z; undated ones last
+const sortedDecisions = p => [...p.decisions].sort((a, b) =>
+  (a.date || '9999') < (b.date || '9999') ? -1 : (a.date || '9999') > (b.date || '9999') ? 1 : (a.title || '').localeCompare(b.title || ''));
+const decisionsFor = (p, t) => sortedDecisions(p).filter(d => d.cardIds.includes(t.id));
+
+function newDecision() {
+  const p = project();
+  const d = { id: uid(), title: '', status: 'proposed', date: today(), deciders: [], summary: '', body: DECISION_TEMPLATE,
+    cardIds: [], history: [], comments: [], attachments: [] };
+  p.decisions.push(d); save(); render(); openDecision(d);
+}
+
+const DECISION_FILTER = p => 'decisionFilter:' + p.id;
+function decisionsPage(p) {
+  let saved = {};
+  try { saved = JSON.parse(store.get(DECISION_FILTER(p)) || '{}'); } catch {}
+  const statuses = new Set(Array.isArray(saved.statuses) ? saved.statuses : []);
+  const remember = () => store.set(DECISION_FILTER(p), JSON.stringify({ statuses: [...statuses], q: search.value }));
+  const search = h('input', { type: 'search', placeholder: 'Search titles, summaries and text…', value: saved.q || '', style: 'flex:1;min-width:180px',
+    oninput: () => { remember(); drawList(); } });
+  const chips = h('div', { class: 'chips' });
+  const drawChips = () => chips.replaceChildren(...DECISION_STATUSES.map(s =>
+    h('button', { class: 'chip status ' + s + (statuses.has(s) ? ' on' : ' off'), 'aria-pressed': String(statuses.has(s)),
+      onclick: () => { statuses.has(s) ? statuses.delete(s) : statuses.add(s); remember(); drawChips(); drawList(); } }, cap(s))));
+  const list = h('div', { class: 'list' });
+  const drawList = () => {
+    const q = search.value.trim().toLowerCase();
+    const shown = sortedDecisions(p).filter(d => (!statuses.size || statuses.has(d.status)) &&
+      (!q || [d.title, d.summary, d.body].some(x => (x || '').toLowerCase().includes(q))));
+    list.replaceChildren(...(shown.length ? shown.map(d => h('div', { class: 'decision-row status ' + d.status, tabIndex: 0, role: 'button',
+        onclick: () => openDecision(d), onkeydown: e => { if (e.key === 'Enter') openDecision(d); } },
+      h('div', { class: 'decision-main' },
+        h('div', {}, h('strong', {}, d.title || 'Untitled decision'), ' ', statusChip(d)),
+        d.summary ? h('div', { class: 'count' }, d.summary) : null),
+      h('span', { class: 'count', style: 'white-space:nowrap' }, fmtDate(d.date)),
+      h('span', { class: 'deciders' }, d.deciders.map(personById).filter(Boolean).map(avatar))))
+      : [h('p', { class: 'count' }, p.decisions.length ? 'No decisions match.' : 'No decisions yet. Record one with "+ New decision".')]));
+  };
+  drawChips(); drawList();
+  return h('div', { class: 'decisions' },
+    h('div', { class: 'decision-toolbar' }, h('button', { class: 'primary', onclick: newDecision }, '+ New decision'), search, chips),
+    list);
+}
+
+function openDecision(d) {
+  const p = project();
+  const alive = () => state.projects.includes(p) && p.decisions.includes(d);
+  const title = h('input', { value: d.title, placeholder: 'Decision title', style: 'font-size:18px;font-weight:600',
+    oninput: e => { d.title = e.target.value; save(); } });
+
+  // superseding: this one replaces an older decision, or a newer one replaced this
+  const banner = h('div', { class: 'banner' });
+  const supersedes = h('select', { onchange: e => {
+      const old = p.decisions.find(x => x.id === e.target.value);
+      if (old) { d.supersedes = old.id; old.status = 'superseded'; } else delete d.supersedes;
+      save(); drawLinks(); } });
+  const drawLinks = () => {
+    const newer = p.decisions.filter(x => x.supersedes === d.id);
+    banner.replaceChildren(...newer.map(x => h('div', {}, 'Superseded by ',
+      h('button', { class: 'link', onclick: () => openDecision(x) }, decisionLabel(x)))));
+    banner.hidden = !newer.length;
+    if (document.activeElement !== supersedes) supersedes.replaceChildren(h('option', { value: '' }, '— Nothing —'),
+      ...sortedDecisions(p).filter(x => x !== d).map(x => h('option', { value: x.id, selected: x.id === d.supersedes }, decisionLabel(x))));
+    const old = p.decisions.find(x => x.id === d.supersedes);
+    oldLink.replaceChildren(...(old ? [h('button', { class: 'link', onclick: () => openDecision(old) }, 'Open ' + decisionLabel(old))] : []));
+  };
+  const oldLink = h('div', {});
+
+  const status = h('select', { onchange: e => { d.status = e.target.value; save(); } },
+    DECISION_STATUSES.map(s => h('option', { value: s, selected: s === d.status }, cap(s))));
+  const date = h('input', { type: 'date', value: d.date || '', onchange: e => { d.date = e.target.value; save(); } });
+  // decided by: several people
+  const decidersBox = h('div', { class: 'tag-edit' });
+  const drawDeciders = () => {
+    const add = personSelect(() => '', id => { if (id && !d.deciders.includes(id)) d.deciders.push(id); drawDeciders(); }, '+ Add person…');
+    decidersBox.replaceChildren(...d.deciders.map(personById).filter(Boolean).map(x => h('span', { class: 'chip' }, avatar(x), x.name,
+      h('button', { title: 'Remove', onclick: () => { d.deciders = d.deciders.filter(id => id !== x.id); save(); drawDeciders(); } }, '✕'))), add);
+  };
+  const summary = h('textarea', { rows: 2, value: d.summary, placeholder: 'One or two lines: what was decided', oninput: e => { d.summary = e.target.value; save(); } });
+
+  // the full write-up; every editing session that changes it is kept as a version
+  const keepVersion = () => {
+    const who = me();
+    d.history.push({ id: uid(), at: new Date().toISOString(), authorId: who?.id || '', authorName: who?.name || 'Unknown', body: d.body });
+    save(); historyBtn.textContent = `History (${d.history.length})`;
+  };
+  const body = markdownField({ get: () => d.body, set: v => { d.body = v; }, rows: 22, onEditEnd: keepVersion });
+  const historyBtn = h('button', { class: 'link', onclick: () => { body.finish(); openHistory(d, () => openDecision(d)); } }, `History (${d.history.length})`);
+
+  // linked cards
+  const cardsBox = h('div', { class: 'list' });
+  const linkCard = h('select', { onchange: e => { if (e.target.value && !d.cardIds.includes(e.target.value)) { d.cardIds.push(e.target.value); save(); } drawCards(); } });
+  const drawCards = () => {
+    const linked = d.cardIds.map(id => p.tasks.find(t => t.id === id)).filter(Boolean);
+    cardsBox.replaceChildren(...linked.map(t => h('div', { class: 'item' },
+      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => { body.finish(); openTask(t); } }, t.title + (t.archived ? ' (archived)' : '')),
+      h('button', { class: 'link', title: 'Unlink', onclick: () => { d.cardIds = d.cardIds.filter(id => id !== t.id); save(); drawCards(); } }, '✕'))));
+    if (document.activeElement === linkCard) return;
+    const free = p.tasks.filter(t => !d.cardIds.includes(t.id));
+    linkCard.replaceChildren(h('option', { value: '' }, free.length ? '+ Link a card…' : 'No cards to link'),
+      ...free.map(t => h('option', { value: t.id }, t.title)));
+    linkCard.disabled = !free.length;
+  };
+
+  const files = attachmentsSection(d, alive), comments = commentsSection(d);
+  drawLinks(); drawDeciders(); drawCards();
+  showDialog(
+    banner,
+    title,
+    h('div', { class: 'row' },
+      h('div', { style: 'flex:0 0 160px' }, h('label', {}, 'Status'), status),
+      h('div', { style: 'flex:0 0 170px' }, h('label', {}, 'Decision date'), date),
+      h('div', {}, h('label', {}, 'Decided by'), decidersBox)),
+    h('div', {}, h('label', {}, 'Summary'), summary),
+    h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Write-up'), h('span', {}, historyBtn, ' ', body.modeBtn)), body.area, body.preview),
+    h('div', { class: 'row', style: 'align-items:flex-start' },
+      h('div', {}, h('label', {}, 'Linked cards'), cardsBox, linkCard),
+      h('div', {}, h('label', {}, 'Supersedes'), supersedes, oldLink)),
+    files.el,
+    comments.el,
+    h('div', { class: 'row', style: 'justify-content:space-between' },
+      h('button', { style: 'flex:none', onclick: () => { if (confirm('Delete this decision? It stays in Recently deleted for 30 days.')) { p.decisions = p.decisions.filter(x => x !== d); save(); closeModal(); } } }, 'Delete decision'),
+      h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done')));
+  dialog.classList.add('decision-view');
+  Object.assign(dialog, files.dropHandlers);
+  onDialogClose = body.finish;
+
+  syncDialog = () => {
+    if (!alive()) return deletedNotice('decision', d.title || 'Untitled decision');
+    const a = document.activeElement;
+    if (a !== title) title.value = d.title;
+    if (a !== status) status.value = d.status;
+    if (a !== date) date.value = d.date || '';
+    if (a !== summary) summary.value = d.summary;
+    if (!decidersBox.contains(a)) drawDeciders();
+    historyBtn.textContent = `History (${d.history.length})`;
+    drawLinks(); drawCards(); body.refresh(); files.refresh(); comments.refresh();
+  };
+}
+
+// earlier versions of a decision's write-up, newest first; restoring keeps the current text as a version too
+function openHistory(d, back) {
+  const draw = () => {
+    if (!project().decisions.includes(d)) return deletedNotice('decision', d.title);
+    showDialog(
+      h('h2', {}, `History: ${decisionLabel(d)}`),
+      h('p', { class: 'hint', style: 'padding:0' }, 'A version is kept each time someone finishes editing the write-up.'),
+      d.history.length ? h('div', { class: 'list' }, [...d.history].reverse().map(v => {
+        const text = h('div', { class: 'md', hidden: true });
+        text.innerHTML = Markdown.render(v.body);  // Markdown.render escapes all text: safe to insert
+        const current = v.body === d.body;
+        return h('div', { class: 'comment' },
+          h('div', { class: 'comment-head' }, h('strong', {}, v.authorName), h('span', { class: 'count' }, fmtWhen(v.at) + (current ? ' (current text)' : '')),
+            h('span', { class: 'comment-tools' },
+              h('button', { class: 'link', onclick: e => { text.hidden = !text.hidden; e.target.textContent = text.hidden ? 'View' : 'Hide'; } }, 'View'),
+              current ? null : h('button', { class: 'link', onclick: () => {
+                if (!confirm('Replace the current write-up with this version? The current text is kept in the history.')) return;
+                const who = me();
+                if (d.history[d.history.length - 1]?.body !== d.body) {
+                  d.history.push({ id: uid(), at: new Date().toISOString(), authorId: who?.id || '', authorName: who?.name || 'Unknown', body: d.body });
+                }
+                d.body = v.body;
+                d.history.push({ id: uid(), at: new Date().toISOString(), authorId: who?.id || '', authorName: `${who?.name || 'Unknown'} (restored a version)`, body: v.body });
+                save(); back(); } }, 'Restore'))),
+          text);
+      })) : h('p', { class: 'count' }, 'No versions yet.'),
+      buttons(h('button', { onclick: back }, 'Back'), h('button', { class: 'primary', onclick: closeModal }, 'Done')));
+    dialog.classList.add('decision-view');
+  };
+  syncDialog = draw;
+  draw();
 }
 
 // ---------- recently deleted bin ----------
 function openBin() {
-  const kinds = { task: 'Card', stage: 'Stage', major: 'Major phase', project: 'Project', attachment: 'Attachment' };
+  const kinds = { task: 'Card', stage: 'Stage', major: 'Major phase', project: 'Project', attachment: 'Attachment', decision: 'Decision' };
   const status = h('p', { class: 'count' });
   const act = async (url, method) => {
     const r = await fetch(url, { method }).catch(() => null);
@@ -1011,7 +1254,7 @@ function openBin() {
       shown.length ? h('div', { class: 'list' }, shown.map(e => h('div', { class: 'item bin-item', 'data-id': e.id },
         h('div', { class: 'bin-text' },
           h('div', {}, h('strong', {}, e.name), ` (${kinds[e.kind]})`),
-          h('div', { class: 'count' }, [e.from && `from ${e.from}`, e.cards && `${e.cards} card(s)`,
+          h('div', { class: 'count' }, [e.from && (e.kind === 'decision' ? `decided ${fmtDate(e.from)}` : `from ${e.from}`), e.cards && `${e.cards} card(s)`,
             `deleted ${new Date(e.deletedAt).toLocaleDateString()}`, `kept until ${new Date(e.expiresAt).toLocaleDateString()}`].filter(Boolean).join(' · '))),
         h('button', { onclick: () => act(`/api/trash/${e.id}/restore`, 'POST') }, 'Restore'),
         h('button', { class: 'link', onclick: () => { if (confirm(`Permanently delete "${e.name}"? This can’t be undone.`)) act(`/api/trash/${e.id}`, 'DELETE'); } }, 'Delete forever')))) :
