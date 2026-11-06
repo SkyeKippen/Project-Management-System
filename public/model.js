@@ -24,6 +24,7 @@
   function normalizeState(s, uid) {
     let changed = false;
     if (!Array.isArray(s.people)) { s.people = []; changed = true; }
+    for (const x of s.people) if ('reviewer' in x && x.reviewer !== true) { delete x.reviewer; changed = true; }
     const personIds = new Set(s.people.map(x => x.id));
     for (const p of s.projects) if (normalizeProject(p, uid, personIds)) changed = true;
     return changed;
@@ -48,6 +49,11 @@
       fix(!Array.isArray(t.attachments), () => { t.attachments = []; });
       fix(!Array.isArray(t.steps), () => { t.steps = []; });
       fix(!Array.isArray(t.comments), () => { t.comments = []; });
+      // a card in review: { status: pending | declined, by, byName, at, reason? }. Anything else malformed stays in review.
+      if ('review' in t) {
+        fix(t.review === null || typeof t.review !== 'object', () => { t.review = { status: 'pending', by: '', byName: 'Someone', at: '' }; });
+        fix(!['pending', 'declined'].includes(t.review.status), () => { t.review.status = 'pending'; });
+      }
       // an assignee who was deleted (perhaps at the same moment) leaves the card or step unassigned
       for (const x of [t, ...t.steps]) fix('assigneeId' in x && !personIds.has(x.assigneeId), () => { delete x.assigneeId; });
     }

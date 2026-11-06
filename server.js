@@ -92,7 +92,53 @@ function migrate(s) {
     s.upgrades.push('stages:done');
     changed = true;
   }
+  // card review: Skye reviews (created if missing); existing cards count as approved
+  if (!s.upgrades.includes('review:skye')) {
+    let skye = s.people.find(x => x.name.trim().toLowerCase() === 'skye');
+    if (!skye) { skye = { id: uid(), name: 'Skye' }; s.people.push(skye); }
+    skye.reviewer = true;
+    s.upgrades.push('review:skye');
+    changed = true;
+  }
   return changed;
+}
+
+// The review rules for one batch of changes by `actor` (a person id, or ''). Returns why it's refused, or null.
+// Reviewers may do anything. Others' new cards are put in review here, whatever the page sent.
+function reviewViolation(before, after, actor, binIds) {
+  const reviewers = new Set(before.people.filter(x => x.reviewer).map(x => x.id));
+  if (!reviewers.size) return null;  // nobody reviews: no workflow
+  if (reviewers.has(actor)) return null;
+  const flags = s => JSON.stringify(s.people.filter(x => x.reviewer).map(x => x.id).sort());
+  if (flags(before) !== flags(after)) return 'Only a reviewer can change who reviews cards.';
+  const who = after.people.find(x => x.id === actor);
+  // a card in review, ignoring its comments (anyone may comment)
+  const content = t => JSON.stringify({ ...t, comments: undefined });
+  for (const pa of after.projects) {
+    const pb = before.projects.find(p => p.id === pa.id), old = new Map((pb ? pb.tasks : []).map(t => [t.id, t]));
+    for (const t of pa.tasks) {
+      const o = old.get(t.id);
+      if (!o) {
+        // a new card, unless it's coming back from the bin (e.g. Undo of a delete)
+        if (!t.review && !binIds.has(t.id)) t.review = { status: 'pending', by: actor, byName: who ? who.name : 'Someone', at: new Date().toISOString() };
+        continue;
+      }
+      if (!o.review) continue;
+      if (!t.review) return 'Only a reviewer can approve cards.';
+      if (o.review.status === 'pending' && t.review.status === 'declined') return 'Only a reviewer can decline cards.';
+      if (o.review.by !== actor && content(o) !== content(t)) return 'Only a reviewer or the person who sent it can change a card in review.';
+    }
+    for (const o of pb ? pb.tasks : []) {
+      if (o.review && o.review.by !== actor && !pa.tasks.some(t => t.id === o.id)) return 'Only a reviewer or the person who sent it can delete a card in review.';
+    }
+  }
+  return null;
+}
+// the person making a request: Cloudflare Access's verified email when present, else the page's own claim
+function actorOf(req) {
+  const email = String(req.headers['cf-access-authenticated-user-email'] || '').trim().toLowerCase();
+  if (email) { const x = state.people.find(p => (p.email || '').toLowerCase() === email); return x ? x.id : ''; }
+  return String(req.headers['x-person-id'] || '');
 }
 
 // ---------- persistence: debounced, atomic (temp file + rename) ----------
@@ -419,9 +465,12 @@ const server = http.createServer((req, res) => {
           Sync.apply(state, ops);
           delete state.trash;  // the bin isn't part of the synced board
           Model.normalizeState(state, uid);
-          captureDeletions(before, state);
-          reconcileTrash();
         } catch { state = before; res.writeHead(400); return res.end('invalid ops'); }
+        const binIds = new Set(trash.flatMap(e => e.kind === 'task' ? [e.item.id] : e.kind === 'project' ? e.item.tasks.map(t => t.id) : (e.tasks || []).map(t => t.id)));
+        const refused = reviewViolation(before, state, actorOf(req), binIds);
+        if (refused) { state = before; res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end(refused); }
+        captureDeletions(before, state);
+        reconcileTrash();
         // deleted things wait in the bin, so this only removes files nothing refers to at all
         const hasFiles = attachmentIds();
         removeFiles([...hadFiles].filter(id => !hasFiles.has(id)));

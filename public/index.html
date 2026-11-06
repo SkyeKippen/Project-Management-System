@@ -42,6 +42,16 @@
   /* bin */
   .bin-text { flex:1; min-width:0; overflow-wrap:anywhere; }
   .bin-item button { flex:none; white-space:nowrap; }
+  /* card review */
+  .tab.review-tab .count { background:var(--line); border-radius:8px; padding:0 6px; }
+  .tab.review-tab.has .count { background:var(--accent); color:#fff; }
+  .review { display:flex; flex-direction:column; gap:10px; max-width:1100px; }
+  .review h3 { margin:6px 0 0; font-size:14px; }
+  .review-row { display:flex; gap:14px; align-items:flex-start; background:var(--panel); border-radius:6px; padding:10px; }
+  .review-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  .declined-reason { color:var(--danger); }
+  .review-bar { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; background:color-mix(in srgb, var(--accent) 14%, transparent); border:1px solid var(--accent); border-radius:6px; padding:8px 12px; }
+  .review-bar[hidden] { display:none; }
   /* decisions log */
   .decisions { display:flex; flex-direction:column; gap:12px; max-width:1100px; }
   .decision-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -248,8 +258,17 @@ async function flush() {
   sentState = Sync.clone(state);
   let ok = false;
   try {
-    const r = await fetch('/api/ops', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ops }) });
+    // who is making the change (Cloudflare Access, when in front, takes precedence on the server)
+    const r = await fetch('/api/ops', { method: 'POST', body: JSON.stringify({ ops }),
+      headers: { 'Content-Type': 'application/json', 'X-Person-Id': me()?.id || '' } });
     if (r.ok) { receive(await r.json()); settle(); ok = true; }
+    else if (r.status === 400 || r.status === 403) {
+      // refused (e.g. only a reviewer may approve): drop these edits rather than resending them forever
+      const why = r.status === 403 ? await r.text() : 'That change couldn’t be saved.';
+      Sync.apply(state, Sync.diff(state, base)); undoSnap = Sync.clone(state);
+      renderSoon(); if (syncDialog) syncDialog();
+      toast(why); ok = true;
+    }
   } catch {}
   sending = false;
   if (ok) flush(); else { setStatus(false); setTimeout(flush, 2000); }  // unsent edits stay in `state` and are retried
@@ -381,15 +400,18 @@ document.addEventListener('focusout', () => { if (needRender) setTimeout(renderS
 
 const project = () => state.projects.find(p => p.id === currentId) || state.projects[0];
 
+// cards in review (t.review) are not on the board yet: their stageId is where they go once approved
+const inReview = t => !!t.review;
+const onBoard = t => !t.archived && !t.review;
 const orphansOf = p => {
   const ids = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
-  return p.tasks.filter(t => !t.archived && !ids.has(t.stageId));
+  return p.tasks.filter(t => onBoard(t) && !ids.has(t.stageId));
 };
-const archivedOf = p => p.tasks.filter(t => t.archived);
+const archivedOf = p => p.tasks.filter(t => t.archived && !t.review);
 const setArchived = (t, on) => { if (on) { t.archived = true; t.archivedAt = new Date().toISOString(); } else { delete t.archived; delete t.archivedAt; } };
 // done = in a done stage, or archived from any of this major phase's stages
 function phaseProgress(p, m) {
-  const ids = new Set(m.stages.map(s => s.id)), all = p.tasks.filter(t => ids.has(t.stageId));
+  const ids = new Set(m.stages.map(s => s.id)), all = p.tasks.filter(t => !t.review && ids.has(t.stageId));
   const done = all.filter(t => t.archived || m.stages.find(s => s.id === t.stageId).done).length;
   return { all: all.length, done, pct: all.length ? Math.round(done / all.length * 100) : 0 };
 }
@@ -399,8 +421,9 @@ const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
 // selected view per project: a major phase id, or ORPHANS/ARCHIVED for those pages
-const ORPHANS = 'orphans', ARCHIVED = 'archived', DECISIONS = 'decisions';
+const ORPHANS = 'orphans', ARCHIVED = 'archived', DECISIONS = 'decisions', REVIEW = 'review';
 const showingDecisions = () => store.get(viewKey(project())) === DECISIONS;
+const showingReview = () => store.get(viewKey(project())) === REVIEW;
 const viewKey = p => 'currentMajor:' + p.id;
 const showingOrphans = () => store.get(viewKey(project())) === ORPHANS;
 const showingArchived = () => store.get(viewKey(project())) === ARCHIVED;
@@ -514,8 +537,10 @@ function dragHint(text) {
 }
 const DRAG_HINT = 'Drop in a stage, or on a Major Phase tab to move the card there';
 
-// move a card to a stage, in any major phase (stageId null: Orphaned cards); the board follows it
+// move a card to a stage, in any major phase (stageId null: Orphaned cards); the board follows it.
+// For a card in review this only changes where it will go once approved.
 function moveCardTo(p, t, stageId) {
+  if (t.review) { t.stageId = stageId; save(); render(); return; }
   if (stageId) {
     moveTask(p, t, stageId, null);
     setView(p.majorPhases.find(m => m.stages.some(s => s.id === stageId)).id);
@@ -561,8 +586,9 @@ function render() {
   const tabs = document.getElementById('tabs'), filters = document.getElementById('filters'), board = document.getElementById('board');
   const p = project();
   if (!p) { tabs.replaceChildren(); filters.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
-  const orphans = showingOrphans(), archived = showingArchived(), decisions = showingDecisions();
-  const mp = orphans || archived || decisions ? null : currentMajor();
+  const orphans = showingOrphans(), archived = showingArchived(), decisions = showingDecisions(), review = showingReview();
+  const mp = orphans || archived || decisions || review ? null : currentMajor();
+  const pending = p.tasks.filter(t => t.review?.status === 'pending').length;
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
     h('button', { class: 'link addtab', onclick: addMajor }, '+ Major phase'),
@@ -570,9 +596,14 @@ function render() {
     h('div', { class: 'tab' + (archived ? ' active' : ''), title: 'Archived cards', onclick: () => { if (!archived) { setView(ARCHIVED); render(); } } },
       h('span', { class: 'name' }, 'Archived'), h('span', { class: 'count' }, archivedOf(p).length)),
     h('div', { class: 'tab' + (decisions ? ' active' : ''), title: 'Decisions log', onclick: () => { if (!decisions) { setView(DECISIONS); render(); } } },
-      h('span', { class: 'name' }, 'Decisions'), h('span', { class: 'count' }, p.decisions.length)));
+      h('span', { class: 'name' }, 'Decisions'), h('span', { class: 'count' }, p.decisions.length)),
+    // cards waiting for review; the badge stands out for reviewers when any are waiting
+    h('div', { class: 'tab review-tab' + (review ? ' active' : '') + (pending && isReviewer(me()) ? ' has' : ''), title: 'Cards waiting for review',
+        onclick: () => { if (!review) { setView(REVIEW); render(); } } },
+      h('span', { class: 'name' }, 'Review'), h('span', { class: 'count' }, pending)));
   // the card filters don't apply to the decisions log, which has its own
   if (decisions) { filters.replaceChildren(); board.replaceChildren(decisionsPage(p)); return; }
+  if (review) { filters.replaceChildren(); board.replaceChildren(reviewPage(p)); return; }
   renderFilters(p, filters);
 
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
@@ -607,7 +638,7 @@ function renderFilters(p, el) {
 }
 
 function tabEl(p, m, active) {
-  const n = p.tasks.filter(t => !t.archived && m.stages.some(s => s.id === t.stageId)).length, prog = phaseProgress(p, m);
+  const n = p.tasks.filter(t => onBoard(t) && m.stages.some(s => s.id === t.stageId)).length, prog = phaseProgress(p, m);
   const tab = h('div', { class: 'tab' + (active ? ' active' : '') + (m.stages.length ? ' phase-target' : ''), draggable: true, title: 'Drag to reorder',
     onclick: () => { if (!active) { setView(m.id); render(); } },
     ondragstart: e => { if (drag) return; drag = { kind: 'tab', id: m.id }; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'move'; },
@@ -701,7 +732,7 @@ function cardsRow(p, tasks, stageId, onStageDrop, ...head) {
 const countText = (shown, all) => (shown === all ? `${all}` : `${shown}/${all}`) + (all === 1 ? ' card' : ' cards');
 
 function stageEl(p, mp, st) {
-  const all = p.tasks.filter(t => t.stageId === st.id && !t.archived), shown = visible(p, all);
+  const all = p.tasks.filter(t => t.stageId === st.id && onBoard(t)), shown = visible(p, all);
   let row;
   const grip = h('span', { class: 'grip', draggable: true, title: 'Drag to reorder, or onto another tab to move it there',
     ondragstart: e => { drag = { kind: 'stage', id: st.id }; e.dataTransfer.setData('text/plain', st.name); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDragImage(row, 20, 20); } }, '⠿');
@@ -743,14 +774,15 @@ function orphanPage(p) {
 function cardEl(p, t) {
   const cat = categoryOf(p, t), tags = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
   const done = t.steps.filter(x => x.done).length;
-  return h('div', { class: 'card', draggable: !t.archived, 'data-id': t.id, style: '--cat:' + cat.color,
+  const fixed = t.archived || t.review;  // not on the board, so not draggable or movable from the card
+  return h('div', { class: 'card', draggable: !fixed, 'data-id': t.id, style: '--cat:' + cat.color,
     ondragstart: e => {
       drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging');
       document.body.classList.add('dragging-card'); dragHint(DRAG_HINT);
     },
     onclick: () => openTask(t),
-    oncontextmenu: e => { if (t.archived) return; e.preventDefault(); openMoveMenu(p, t, e.clientX, e.clientY); } },
-    t.archived ? null : h('button', { class: 'link card-menu', title: 'Move to…', 'aria-label': 'Move to…',
+    oncontextmenu: e => { if (fixed) return; e.preventDefault(); openMoveMenu(p, t, e.clientX, e.clientY); } },
+    fixed ? null : h('button', { class: 'link card-menu', title: 'Move to…', 'aria-label': 'Move to…',
       onclick: e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); openMoveMenu(p, t, r.left, r.bottom + 4); } }, '⋯'),
     h('div', { class: 'cat' }, h('span', { class: 'dot', style: '--c:' + cat.color }), cat.name),
     h('div', { class: 'title' }, t.title),
@@ -789,15 +821,16 @@ function addMajor() {
   project().majorPhases.push(m); setView(m.id); save(); render();
 }
 // stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked (they then go to the bin with it)
+// (cards in review keep pointing at a deleted stage; whoever approves them picks a new destination)
 function delMajor(m) {
-  const p = project(), ids = new Set(m.stages.map(s => s.id)), cards = p.tasks.filter(t => ids.has(t.stageId));
+  const p = project(), ids = new Set(m.stages.map(s => s.id)), cards = p.tasks.filter(t => !t.review && ids.has(t.stageId));
   confirmDelete(`major phase "${m.name}"`, `${m.stages.length} stage(s) and ${cards.length} card(s)`, cards.length, delCards => {
     if (delCards) p.tasks = p.tasks.filter(t => !cards.includes(t)); else orphan(p, cards);
     p.majorPhases = p.majorPhases.filter(x => x !== m);
   });
 }
 function delStage(mp, st) {
-  const p = project(), cards = p.tasks.filter(t => t.stageId === st.id);
+  const p = project(), cards = p.tasks.filter(t => !t.review && t.stageId === st.id);
   confirmDelete(`stage "${st.name}"`, `${cards.length} card(s)`, cards.length, delCards => {
     if (delCards) p.tasks = p.tasks.filter(t => !cards.includes(t)); else orphan(p, cards);
     mp.stages = mp.stages.filter(x => x !== st);
@@ -807,7 +840,84 @@ function addTask(st) {
   const p = project();
   const t = { id: uid(), title: 'New task', description: '', stageId: st.id, categoryId: Model.defaultCategory(p).id,
     priority: 'medium', tags: [], steps: [], attachments: [], comments: [] };
+  // someone who isn't a reviewer creates cards in review, aimed at this stage
+  const who = me(), review = reviewMode() && !isReviewer(who);
+  if (review) t.review = { status: 'pending', by: who?.id || '', byName: who?.name || 'Someone', at: new Date().toISOString() };
   p.tasks.push(t); save(); render(); openTask(t);
+  if (review) toast('Card sent for review. It will appear here once a reviewer approves it.');
+}
+
+// ---------- card review ----------
+// Reviewers are People with the Reviewer flag. When anyone is a reviewer, cards created by non-reviewers wait in
+// the Review tab until a reviewer approves them (they then appear in their destination stage) or declines them.
+// The server enforces the same rules, from the identity in the header (or Cloudflare Access).
+const isReviewer = x => !!x?.reviewer;
+const reviewMode = () => state.people.some(isReviewer);
+// what the viewer may do with a card in review
+const canReview = () => isReviewer(me());
+const ownsReview = t => !!t.review && t.review.by === (me()?.id || '');
+const destinationOf = (p, t) => {
+  const m = p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId));
+  return m ? `${m.name} › ${m.stages.find(s => s.id === t.stageId).name}` : null;
+};
+function approve(p, t, stageId = t.stageId) {
+  const stages = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
+  if (!stages.has(stageId)) return chooseDestination(p, t);  // its stage was deleted in the meantime
+  delete t.review;
+  t.approvedBy = me()?.id || ''; t.approvedAt = new Date().toISOString();
+  moveTask(p, t, stageId, null);  // at the end of its stage
+  save(); render();
+  toast(`Approved: "${t.title}" is now in ${destinationOf(p, t)}.`);
+}
+function chooseDestination(p, t) {
+  syncDialog = null;
+  const sel = h('select', {},
+    ...p.majorPhases.filter(m => m.stages.length).map(m => h('optgroup', { label: m.name }, m.stages.map(s => h('option', { value: s.id }, s.name)))),
+    h('option', { value: '' }, 'Orphaned cards'));
+  showDialog(h('h2', {}, `Approve "${t.title}"`),
+    h('p', {}, 'The stage it was meant for no longer exists. Where should it go?'), sel,
+    buttons(h('button', { onclick: closeModal }, 'Cancel'),
+      h('button', { class: 'primary', onclick: () => {
+        if (sel.value) approve(p, t, sel.value);
+        else { delete t.review; t.approvedBy = me()?.id || ''; t.approvedAt = new Date().toISOString(); orphan(p, [t], 'Review'); save(); }
+        closeModal(); } }, 'Approve')));
+}
+function decline(p, t) {
+  const reason = prompt(`Decline "${t.title}"? You can give a reason (optional):`, '');
+  if (reason === null) return;
+  t.review = { ...t.review, status: 'declined', reason: reason.trim(), declinedBy: me()?.name || '', declinedAt: new Date().toISOString() };
+  save(); render();
+}
+function resubmit(t) {
+  t.review = { status: 'pending', by: t.review.by, byName: t.review.byName, at: new Date().toISOString() };
+  save(); render();
+}
+
+function reviewPage(p) {
+  const cards = s => p.tasks.filter(t => t.review?.status === s);
+  const row = t => {
+    const r = t.review, mine = ownsReview(t), dest = destinationOf(p, t);
+    return h('div', { class: 'review-row' },
+      cardEl(p, t),
+      h('div', { class: 'review-info' },
+        h('div', {}, h('strong', {}, r.byName), ` submitted ${fmtWhen(r.at)}`),
+        h('div', { class: 'count' }, 'Goes to: ', dest || h('em', {}, 'its stage was deleted; choose one when approving')),
+        r.status === 'declined' ? h('div', { class: 'declined-reason' }, `Declined${r.declinedBy ? ' by ' + r.declinedBy : ''}`, r.reason ? `: ${r.reason}` : '') : null,
+        h('div', { class: 'row', style: 'justify-content:flex-start;flex-wrap:wrap' },
+          canReview() ? [h('button', { class: 'primary', onclick: () => approve(p, t) }, 'Approve'),
+            r.status === 'pending' ? h('button', { onclick: () => decline(p, t) }, 'Decline') : null] : null,
+          r.status === 'declined' && (mine || canReview()) ? h('button', { onclick: () => resubmit(t) }, 'Resubmit') : null,
+          mine || canReview() ? h('button', { class: 'link', onclick: () => {
+            if (confirm(`Delete "${t.title}"? It stays in Recently deleted for 30 days.`)) { p.tasks = p.tasks.filter(x => x !== t); save(); render(); } } }, mine && r.status === 'pending' ? 'Withdraw' : 'Delete') : null)));
+  };
+  const pending = cards('pending'), declined = cards('declined');
+  return h('div', { class: 'review' },
+    h('p', { class: 'hint', style: 'padding:0' }, !reviewMode() ? 'No one is a reviewer, so new cards go straight to the board. Mark reviewers under People.'
+      : canReview() ? 'You are a reviewer: open a card to edit it, then approve or decline it.'
+      : 'Cards you create wait here until a reviewer approves them. You can edit or withdraw your own.'),
+    h('h3', {}, `Waiting for review (${pending.length})`),
+    pending.length ? h('div', { class: 'list' }, pending.map(row)) : h('p', { class: 'count' }, 'Nothing waiting.'),
+    declined.length ? [h('h3', {}, `Declined (${declined.length})`), h('div', { class: 'list' }, declined.map(row))] : null);
 }
 function newTag(p, name) {
   const tag = { id: uid(), name: name.trim().slice(0, 30), color: Model.TAG_COLORS[p.tags.length % Model.TAG_COLORS.length] };
@@ -1096,12 +1206,42 @@ function openTask(t) {
   const archiveBtn = h('button', { onclick: () => { setArchived(t, !t.archived); save(); closeModal(); } });
   const showArchive = () => { archiveBtn.textContent = t.archived ? 'Unarchive' : 'Archive'; };
 
-  drawSteps(); drawTags(); drawPlace(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions();
+  // a card in review: who sent it, where it will go, and the reviewer's (or creator's) actions.
+  // Anyone else can read it and comment, but not change it.
+  const reviewBar = h('div', { class: 'review-bar' }), phaseLabel = h('label', {}), stageLabel = h('label', {});
+  const doneBtn = h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done');
+  const locked = () => !!t.review && !canReview() && !ownsReview(t);
+  const showReview = () => {
+    const r = t.review;
+    phaseLabel.textContent = r ? 'Destination: major phase' : 'Major phase';
+    stageLabel.textContent = r ? 'Destination: stage' : 'Stage';
+    archiveBtn.hidden = !!r;
+    reviewBar.hidden = !r;
+    if (!r) return;
+    reviewBar.replaceChildren(
+      h('div', {}, h('strong', {}, r.status === 'pending' ? 'Waiting for review' : 'Declined'), ` · sent by ${r.byName}, ${fmtWhen(r.at)}`,
+        r.status === 'declined' && r.reason ? h('div', {}, `Reason: ${r.reason}`) : null,
+        locked() ? h('div', { class: 'count' }, 'Only a reviewer or the person who sent it can change it. You can still comment.') : null),
+      h('div', { class: 'row', style: 'flex:none' },
+        canReview() ? [h('button', { class: 'primary', onclick: () => { approve(p, t); if (!t.review) closeModal(); } }, 'Approve'),
+          r.status === 'pending' ? h('button', { onclick: () => { decline(p, t); showReview(); } }, 'Decline') : null] : null,
+        r.status === 'declined' && (ownsReview(t) || canReview()) ? h('button', { onclick: () => { resubmit(t); showReview(); } }, 'Resubmit') : null));
+  };
+  const applyLock = () => {
+    const on = locked();
+    for (const el of dialog.querySelectorAll('input, select, textarea, button')) {
+      if (!comments.el.contains(el) && !reviewBar.contains(el) && el !== doneBtn) el.disabled = on;
+    }
+    desc.preview.style.pointerEvents = on ? 'none' : '';
+  };
+
+  drawSteps(); drawTags(); drawPlace(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions(); showReview();
   showDialog(
+    reviewBar,
     title,
     h('div', { class: 'row' },
-      h('div', {}, h('label', {}, 'Major phase'), phaseSel),
-      h('div', {}, h('label', {}, 'Stage'), stageSel),
+      h('div', {}, phaseLabel, phaseSel),
+      h('div', {}, stageLabel, stageSel),
       h('div', {}, h('label', {}, 'Category'), h('div', { style: 'display:flex;align-items:center;gap:6px' }, catDot, catSel))),
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Priority'), prio),
@@ -1116,10 +1256,12 @@ function openTask(t) {
     comments.el,
     h('div', { class: 'row', style: 'justify-content:space-between' },
       h('div', { class: 'row', style: 'flex:none' },
-        h('button', { onclick: () => { if (confirm('Delete this task? It stays in Recently deleted for 30 days.')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } }, 'Delete task'),
+        h('button', { onclick: () => { if (confirm('Delete this task? It stays in Recently deleted for 30 days.')) { p.tasks = p.tasks.filter(x => x !== t); save(); closeModal(); } } },
+          t.review && ownsReview(t) && t.review.status === 'pending' ? 'Withdraw' : 'Delete task'),
         archiveBtn),
-      h('button', { class: 'primary', style: 'flex:none', onclick: closeModal }, 'Done')));
+      doneBtn));
   dialog.classList.add('card-view');
+  applyLock();
   // drop handlers live on the whole dialog while it shows this task
   Object.assign(dialog, files.dropHandlers);
 
@@ -1136,7 +1278,7 @@ function openTask(t) {
     if (!stepsBox.contains(a)) drawSteps();
     if (a !== linkDecision) drawDecisions();
     assignee.refresh(); comments.refresh(); desc.refresh(); files.refresh();
-    showFrom(); showCat(); showAssignee(); showArchive();
+    showFrom(); showCat(); showAssignee(); showArchive(); showReview(); applyLock();
   };
 }
 
@@ -1438,7 +1580,7 @@ function openPeople() {
       onkeydown: e => { if (e.key === 'Enter' && findOrAddPerson(adder.value)) { adder.value = ''; save(); adder.blur(); draw(); } } });
     showDialog(
       h('h2', {}, 'People'),
-      h('p', { class: 'hint', style: 'padding:0' }, 'Everyone here can be assigned to cards and steps in every project.'),
+      h('p', { class: 'hint', style: 'padding:0' }, 'Everyone here can be assigned to cards and steps in every project. Cards created by anyone who isn’t a Reviewer wait in the Review tab until a reviewer approves them.'),
       sorted.length ? h('div', { class: 'list' }, sorted.map(x => h('div', { class: 'item' },
         avatar(x),
         h('input', { type: 'text', value: x.name, maxLength: 40, onchange: e => {
@@ -1447,6 +1589,10 @@ function openPeople() {
           if (name && !state.people.some(o => o !== x && sameName(o.name, name))) x.name = name;
           e.target.value = x.name; save(); } }),
         h('span', { class: 'count' }, `${assignments(x).length} assignment(s)`),
+        // only a reviewer can change who reviews (the server checks too); with no reviewers yet, anyone can set one up
+        h('label', { class: 'check default-cat', title: 'Approves or declines cards created by others' },
+          h('input', { type: 'checkbox', checked: isReviewer(x), disabled: reviewMode() && !canReview(),
+            onchange: e => { if (e.target.checked) x.reviewer = true; else delete x.reviewer; save(); render(); draw(); } }), 'Reviewer'),
         h('button', { class: 'link', title: 'Delete', onclick: () => {
           const n = assignments(x).length;
           if (n && !confirm(`Delete ${x.name}? They will be unassigned from ${n} card(s)/step(s).`)) return;

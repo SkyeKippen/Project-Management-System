@@ -11,6 +11,16 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 
 Tick **Done stage** on any stage (one or more per major phase; stages named "Done" start ticked). Each major phase tab shows its progress: cards in done stages, plus archived cards, as a share of all its cards. Archive a card from its dialog, or everything showing in a done stage with **Archive all**. Archived cards leave the board and appear under the **Archived** tab, where opening one lets you unarchive it back to its stage.
 
+### Card review
+
+People marked **Reviewer** under **People** approve cards that others create. Skye is a reviewer from the start (added to People if missing), and only a reviewer can change who reviews.
+
+- When someone who isn't a reviewer adds a card with **+ Add task**, it is created **in review**, aimed at that stage. It doesn't appear on the board; it waits in the **Review** tab, whose count is highlighted for reviewers. The card's dialog shows its destination, which can be changed.
+- A reviewer can edit it, **Approve** it (it appears at the end of its destination stage, or the reviewer picks a new one if that stage was deleted meanwhile), or **Decline** it with an optional reason. Declined cards stay in the Review tab with the reason, and can be resubmitted, approved later, or deleted.
+- The person who sent a card can edit, resubmit or withdraw it. Anyone else can only read it and comment.
+- Cards created by reviewers, and all cards that existed before this feature, go straight to the board. Major phases and stages can be created by anyone.
+- The server enforces these rules. It identifies people by their Cloudflare Access login when present; otherwise by the **You are** choice in the page, which anyone can change, so this suits a small group of trusted people.
+
 ### Decisions log
 
 Each project has a **Decisions** tab for recording decisions in detail. Decisions have no numbers; they are known by title and date.
