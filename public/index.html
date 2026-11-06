@@ -137,7 +137,11 @@
   .field-head label { margin:0; }
   .step, .item { display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
   .step input[type=text], .item input[type=text] { flex:1; border:0; background:transparent; }
-  .step.done input[type=text] { text-decoration:line-through; color:var(--muted); }
+  .step { align-items:flex-start; }
+  .step > input[type=checkbox] { margin-top:7px; }
+  textarea.wrap { resize:none; overflow:hidden; line-height:1.4; }
+  .step textarea.wrap { flex:1; min-width:0; border:0; background:transparent; padding:4px 6px; }
+  .step.done textarea.wrap { text-decoration:line-through; color:var(--muted); }
   .list { display:flex; flex-direction:column; gap:4px; }
   .tag-edit { display:flex; flex-wrap:wrap; gap:4px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:4px; }
   .tag-edit input { flex:1; min-width:120px; border:0; width:auto; }
@@ -911,6 +915,21 @@ const deletedNotice = (what, name) => {
     buttons(h('button', { class: 'primary', onclick: closeModal }, 'Close')));
 };
 
+// one-line text that wraps and grows to fit instead of scrolling sideways; Enter commits it rather than adding a line
+const grow = el => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; };
+// heights can only be measured once the boxes are on screen
+const growAll = root => requestAnimationFrame(() => root.querySelectorAll('textarea.wrap').forEach(grow));
+window.addEventListener('resize', () => growAll(dialog));
+function stepText({ class: cls = '', onkeydown, ...props }) {
+  return h('textarea', { ...props, rows: 1, class: ('wrap ' + cls).trim(),
+    oninput: e => grow(e.target),
+    onkeydown: e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();  // no line breaks in a step
+      if (onkeydown) onkeydown(e); else e.target.blur();  // blurring fires onchange, which saves
+    } });
+}
+
 function openTask(t) {
   const p = project();
   const alive = () => state.projects.includes(p) && p.tasks.includes(t);
@@ -921,17 +940,18 @@ function openTask(t) {
     stepsBox.replaceChildren(...t.steps.map(s =>
       h('div', { class: 'step' + (s.done ? ' done' : '') },
         h('input', { type: 'checkbox', checked: s.done, onchange: e => { s.done = e.target.checked; save(); drawSteps(); } }),
-        h('input', { type: 'text', value: s.name, onchange: e => { s.name = e.target.value; save(); } }),
+        stepText({ value: s.name, onchange: e => { s.name = e.target.value; save(); } }),
         h('span', { class: 'person-pick' }, personById(s.assigneeId) ? avatar(personById(s.assigneeId)) : null,
           personSelect(() => s.assigneeId, id => { assign(s, id); drawSteps(); })),
         // look the step up on click: someone else may have changed the list since it was drawn
         h('button', { class: 'link', onclick: () => { const i = t.steps.indexOf(s); if (i > 0) { [t.steps[i - 1], t.steps[i]] = [t.steps[i], t.steps[i - 1]]; save(); drawSteps(); } } }, '↑'),
         h('button', { class: 'link', onclick: () => { t.steps = t.steps.filter(x => x !== s); save(); drawSteps(); } }, '✕'))));
+    growAll(stepsBox);
   };
-  const newStep = h('input', { placeholder: 'Add a step and press Enter',
+  const newStep = stepText({ placeholder: 'Add a step and press Enter', class: 'new-step',
     onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) {
       t.steps.push({ id: uid(), name: e.target.value.trim(), done: false });
-      e.target.value = ''; save(); drawSteps(); } } });
+      e.target.value = ''; grow(e.target); save(); drawSteps(); } } });
 
   // stage, category, priority, size
   const stageOptions = () => [
