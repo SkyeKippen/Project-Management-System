@@ -95,6 +95,21 @@
   .card { width:220px; flex:none; background:var(--card); border-radius:4px; border-left:4px solid var(--cat, var(--line)); padding:8px 10px; box-shadow:0 1px 1px rgba(0,0,0,.2); cursor:grab; display:flex; flex-direction:column; gap:5px; }
   .card.dragging { opacity:.4; }
   .card .title { font-weight:500; overflow-wrap:anywhere; }
+  .card { position:relative; }
+  .card .cat { padding-right:22px; }
+  .card-menu { position:absolute; top:2px; right:2px; font-size:16px; line-height:1; padding:2px 6px; opacity:.5; }
+  .card:hover .card-menu, .card-menu:focus { opacity:1; }
+  /* move-to menu and drag hints */
+  #menu { position:fixed; z-index:20; min-width:200px; max-height:70vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.4); padding:4px; display:flex; flex-direction:column; }
+  #menu[hidden] { display:none; }
+  #menu .menu-title { font-weight:600; padding:4px 8px; }
+  #menu .menu-group { font-size:11px; color:var(--muted); padding:6px 8px 2px; text-transform:uppercase; letter-spacing:.04em; }
+  #menu button { text-align:left; border:0; background:none; padding:5px 12px; border-radius:4px; }
+  #menu button:hover:not(:disabled), #menu button:focus { background:var(--panel); }
+  #menu button:disabled { color:var(--muted); cursor:default; }
+  #drag-hint { position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:15; background:var(--accent); color:#fff; border-radius:6px; padding:6px 14px; font-weight:500; pointer-events:none; box-shadow:0 2px 10px rgba(0,0,0,.35); }
+  #drag-hint[hidden] { display:none; }
+  body.dragging-card .tab.phase-target:not(.active), body.dragging-card .tab.orphans { outline:1px dashed var(--accent); outline-offset:-2px; color:var(--text); }
   .cat { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--c); flex:none; }
   .chips { display:flex; flex-wrap:wrap; gap:4px; }
@@ -190,6 +205,8 @@
   <span id="status" class="offline">● Connecting…</span>
 </header>
 <nav id="tabs"></nav>
+<div id="drag-hint" hidden></div>
+<div id="menu" role="menu" hidden></div>
 <div id="filters"></div>
 <div id="board"></div>
 
@@ -485,10 +502,47 @@ function renderHeader() {
 let drag = null;
 function endDrag() {
   drag = null;
+  document.body.classList.remove('dragging-card'); dragHint();
   document.querySelectorAll('.dragging, .over, .drop-before, .drop-after').forEach(el => el.classList.remove('dragging', 'over', 'drop-before', 'drop-after'));
   if (needRender) renderSoon();
 }
 document.addEventListener('dragend', endDrag);
+// while a card is dragged, a hint says where it can go; text null hides it
+function dragHint(text) {
+  const el = document.getElementById('drag-hint');
+  el.textContent = text || ''; el.hidden = !text;
+}
+const DRAG_HINT = 'Drop in a stage, or on a Major Phase tab to move the card there';
+
+// move a card to a stage, in any major phase (stageId null: Orphaned cards); the board follows it
+function moveCardTo(p, t, stageId) {
+  if (stageId) {
+    moveTask(p, t, stageId, null);
+    setView(p.majorPhases.find(m => m.stages.some(s => s.id === stageId)).id);
+  } else { orphan(p, [t], null); setView(ORPHANS); }
+  save(); render();
+}
+
+// "Move to…" menu on a card: every major phase's stages, and Orphaned cards
+function openMoveMenu(p, t, x, y) {
+  const menu = document.getElementById('menu');
+  const here = id => id === t.stageId;
+  menu.replaceChildren(h('div', { class: 'menu-title' }, 'Move to…'),
+    ...p.majorPhases.filter(m => m.stages.length).map(m => [h('div', { class: 'menu-group' }, m.name),
+      ...m.stages.map(s => h('button', { disabled: here(s.id), onclick: () => { closeMenu(); moveCardTo(p, t, s.id); } }, (here(s.id) ? '✓ ' : '') + s.name))]).flat(),
+    h('div', { class: 'menu-group' }, ' '),
+    h('button', { disabled: orphansOf(p).includes(t), onclick: () => { closeMenu(); moveCardTo(p, t, null); } }, 'Orphaned cards'));
+  menu.hidden = false;
+  // keep it on screen
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  menu.querySelector('button:not(:disabled)')?.focus();
+}
+function closeMenu() { document.getElementById('menu').hidden = true; }
+document.addEventListener('mousedown', e => { if (!e.target.closest('#menu')) closeMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+window.addEventListener('scroll', closeMenu, true);
 // before/after the element's midpoint along the given axis
 const dropSide = (e, el, axis) => {
   const r = el.getBoundingClientRect();
@@ -554,16 +608,19 @@ function renderFilters(p, el) {
 
 function tabEl(p, m, active) {
   const n = p.tasks.filter(t => !t.archived && m.stages.some(s => s.id === t.stageId)).length, prog = phaseProgress(p, m);
-  const tab = h('div', { class: 'tab' + (active ? ' active' : ''), draggable: true, title: 'Drag to reorder',
+  const tab = h('div', { class: 'tab' + (active ? ' active' : '') + (m.stages.length ? ' phase-target' : ''), draggable: true, title: 'Drag to reorder',
     onclick: () => { if (!active) { setView(m.id); render(); } },
     ondragstart: e => { if (drag) return; drag = { kind: 'tab', id: m.id }; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'move'; },
     ondragover: e => {
       if (!drag) return;
       if (drag.kind === 'tab' && drag.id !== m.id) { e.preventDefault(); markSide(tab, dropSide(e, tab, 'x')); }
       // a card goes to this phase's first stage; a stage row moves to this phase
-      else if ((drag.kind === 'card' && m.stages.length) || (drag.kind === 'stage' && !m.stages.some(s => s.id === drag.id))) { e.preventDefault(); tab.classList.add('over'); }
+      else if ((drag.kind === 'card' && m.stages.length) || (drag.kind === 'stage' && !m.stages.some(s => s.id === drag.id))) {
+        e.preventDefault(); tab.classList.add('over');
+        if (drag.kind === 'card') dragHint(`Drop to move to ${m.name} › ${m.stages[0].name}`);
+      }
     },
-    ondragleave: () => tab.classList.remove('over', 'drop-before', 'drop-after'),
+    ondragleave: () => { tab.classList.remove('over', 'drop-before', 'drop-after'); if (drag?.kind === 'card') dragHint(DRAG_HINT); },
     ondrop: e => {
       e.preventDefault();
       const d = drag; endDrag();
@@ -598,8 +655,8 @@ function orphanTabEl(p, active) {
   const n = orphansOf(p).length;
   const tab = h('div', { class: 'tab orphans' + (active ? ' active' : '') + (n ? ' has' : ''), title: 'Cards whose stage or major phase was deleted',
     onclick: () => { if (!active) { setView(ORPHANS); render(); } },
-    ondragover: e => { if (drag?.kind === 'card') { e.preventDefault(); tab.classList.add('over'); } },
-    ondragleave: () => tab.classList.remove('over'),
+    ondragover: e => { if (drag?.kind === 'card') { e.preventDefault(); tab.classList.add('over'); dragHint('Drop to move to Orphaned cards'); } },
+    ondragleave: () => { tab.classList.remove('over'); if (drag?.kind === 'card') dragHint(DRAG_HINT); },
     ondrop: e => {
       e.preventDefault();
       const d = drag; endDrag();
@@ -687,8 +744,14 @@ function cardEl(p, t) {
   const cat = categoryOf(p, t), tags = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
   const done = t.steps.filter(x => x.done).length;
   return h('div', { class: 'card', draggable: !t.archived, 'data-id': t.id, style: '--cat:' + cat.color,
-    ondragstart: e => { drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging'); },
-    onclick: () => openTask(t) },
+    ondragstart: e => {
+      drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging');
+      document.body.classList.add('dragging-card'); dragHint(DRAG_HINT);
+    },
+    onclick: () => openTask(t),
+    oncontextmenu: e => { if (t.archived) return; e.preventDefault(); openMoveMenu(p, t, e.clientX, e.clientY); } },
+    t.archived ? null : h('button', { class: 'link card-menu', title: 'Move to…', 'aria-label': 'Move to…',
+      onclick: e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); openMoveMenu(p, t, r.left, r.bottom + 4); } }, '⋯'),
     h('div', { class: 'cat' }, h('span', { class: 'dot', style: '--c:' + cat.color }), cat.name),
     h('div', { class: 'title' }, t.title),
     tags.length ? h('div', { class: 'chips' }, tags.map(tag => tagChip(tag))) : null,
@@ -954,16 +1017,23 @@ function openTask(t) {
       e.target.value = ''; grow(e.target); save(); drawSteps(); } } });
 
   // stage, category, priority, size
-  const stageOptions = () => [
-    h('option', { value: '', selected: orphansOf(p).includes(t) }, '— Orphaned (no stage) —'),
-    ...p.majorPhases.map(m => h('optgroup', { label: m.name },
-      m.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name))))];
-  // the board follows the card to wherever it is moved
-  const stageSel = h('select', { onchange: e => {
-      const id = e.target.value;
-      if (id) { t.stageId = id; delete t.orphanedFrom; setView(p.majorPhases.find(m => m.stages.some(s => s.id === id)).id); }
-      else { orphan(p, [t]); setView(ORPHANS); }
-      save(); } }, stageOptions());
+  // where the card is: a major phase, then one of its stages; changing the phase picks its first stage.
+  // The board follows the card to wherever it is moved.
+  const phaseOf = () => p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId));
+  const phaseSel = h('select', { onchange: e => {
+      const m = p.majorPhases.find(x => x.id === e.target.value);
+      moveCardTo(p, t, m ? m.stages[0].id : null); drawPlace(); } });
+  const stageSel = h('select', { onchange: e => { moveCardTo(p, t, e.target.value); drawPlace(); } });
+  const drawPlace = () => {
+    const here = phaseOf();
+    if (document.activeElement !== phaseSel) phaseSel.replaceChildren(
+      ...p.majorPhases.map(m => h('option', { value: m.id, selected: m === here, disabled: !m.stages.length }, m.name + (m.stages.length ? '' : ' (no stages)'))),
+      h('option', { value: '', selected: !here }, '— Orphaned cards —'));
+    if (document.activeElement !== stageSel) stageSel.replaceChildren(...(here
+      ? here.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name))
+      : [h('option', { value: '' }, '—')]));
+    stageSel.disabled = !here;
+  };
   const catDot = h('span', { class: 'dot', style: 'width:12px;height:12px' });
   const catOptions = () => p.categories.map(c => h('option', { value: c.id, selected: c.id === categoryOf(p, t).id }, c.name));
   const catSel = h('select', { required: true, onchange: e => { t.categoryId = e.target.value; save(); showCat(); } }, catOptions());
@@ -1026,10 +1096,11 @@ function openTask(t) {
   const archiveBtn = h('button', { onclick: () => { setArchived(t, !t.archived); save(); closeModal(); } });
   const showArchive = () => { archiveBtn.textContent = t.archived ? 'Unarchive' : 'Archive'; };
 
-  drawSteps(); drawTags(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions();
+  drawSteps(); drawTags(); drawPlace(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions();
   showDialog(
     title,
     h('div', { class: 'row' },
+      h('div', {}, h('label', {}, 'Major phase'), phaseSel),
       h('div', {}, h('label', {}, 'Stage'), stageSel),
       h('div', {}, h('label', {}, 'Category'), h('div', { style: 'display:flex;align-items:center;gap:6px' }, catDot, catSel))),
     h('div', { class: 'row' },
@@ -1059,7 +1130,7 @@ function openTask(t) {
     if (a !== title) title.value = t.title;
     if (a !== prio) prio.value = t.priority;
     if (a !== size) size.value = t.size || '';
-    if (a !== stageSel) stageSel.replaceChildren(...stageOptions());
+    drawPlace();
     if (a !== catSel) catSel.replaceChildren(...catOptions());
     if (a !== tagInput) drawTags();
     if (!stepsBox.contains(a)) drawSteps();
