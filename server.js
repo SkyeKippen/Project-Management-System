@@ -114,15 +114,22 @@ function reviewViolation(before, after, actor, binIds) {
   const who = after.people.find(x => x.id === actor);
   // a card in review, ignoring its comments (anyone may comment)
   const content = t => JSON.stringify({ ...t, comments: undefined });
+  const toReview = t => { t.review = { status: 'pending', by: actor, byName: who ? who.name : 'Someone', at: new Date().toISOString() }; };
   for (const pa of after.projects) {
     const pb = before.projects.find(p => p.id === pa.id), old = new Map((pb ? pb.tasks : []).map(t => [t.id, t]));
+    // anyone may add bugs: cards in the Bugs phase skip review
+    const bugStages = p => new Set(p.majorPhases.filter(m => m.kind === 'bugs').flatMap(m => m.stages.map(s => s.id)));
+    const bugsAfter = bugStages(pa), bugsBefore = pb ? bugStages(pb) : new Set();
+    const stagesAfter = new Set(pa.majorPhases.flatMap(m => m.stages.map(s => s.id)));
     for (const t of pa.tasks) {
       const o = old.get(t.id);
       if (!o) {
-        // a new card, unless it's coming back from the bin (e.g. Undo of a delete)
-        if (!t.review && !binIds.has(t.id)) t.review = { status: 'pending', by: actor, byName: who ? who.name : 'Someone', at: new Date().toISOString() };
+        // a new card, unless it's a bug or coming back from the bin (e.g. Undo of a delete)
+        if (!t.review && !binIds.has(t.id) && !bugsAfter.has(t.stageId)) toReview(t);
         continue;
       }
+      // a bug moved out of Bugs onto the board needs approving like any new card, or Bugs would be a way round review
+      if (!o.review && !t.review && bugsBefore.has(o.stageId) && stagesAfter.has(t.stageId) && !bugsAfter.has(t.stageId)) { toReview(t); continue; }
       if (!o.review) continue;
       if (!t.review) return 'Only a reviewer can approve cards.';
       if (o.review.status === 'pending' && t.review.status === 'declined') return 'Only a reviewer can decline cards.';
@@ -461,13 +468,21 @@ const server = http.createServer((req, res) => {
       if (!Array.isArray(ops)) { res.writeHead(400); return res.end('expected {"ops": [...]}'); }
       if (ops.length) {
         const before = Sync.clone(state), hadFiles = attachmentIds();
+        let refused = null;
         try {
           Sync.apply(state, ops);
           delete state.trash;  // the bin isn't part of the synced board
+          // the Bugs phase can't be deleted (checked before normalizing, which would quietly add a new one)
+          const bugsId = p => (p.majorPhases.find(m => m.kind === 'bugs') || {}).id;
+          for (const pa of state.projects) {
+            const pb = before.projects.find(p => p.id === pa.id), id = pb && bugsId(pb);
+            if (id && !pa.majorPhases.some(m => m.id === id && m.kind === 'bugs')) refused = 'The Bugs phase can’t be deleted.';
+          }
           Model.normalizeState(state, uid);
         } catch { state = before; res.writeHead(400); return res.end('invalid ops'); }
+        if (refused) { state = before; res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end(refused); }
         const binIds = new Set(trash.flatMap(e => e.kind === 'task' ? [e.item.id] : e.kind === 'project' ? e.item.tasks.map(t => t.id) : (e.tasks || []).map(t => t.id)));
-        const refused = reviewViolation(before, state, actorOf(req), binIds);
+        refused = reviewViolation(before, state, actorOf(req), binIds);
         if (refused) { state = before; res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end(refused); }
         captureDeletions(before, state);
         reconcileTrash();

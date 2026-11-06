@@ -42,6 +42,13 @@
   /* bin */
   .bin-text { flex:1; min-width:0; overflow-wrap:anywhere; }
   .bin-item button { flex:none; white-space:nowrap; }
+  /* bugs */
+  .bugs-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; flex:none; }
+  .check-inline { display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; }
+  .card.resolved { opacity:.6; }
+  .card.resolved .title { text-decoration:line-through; }
+  .badge.resolved-badge { color:var(--ok); border-color:var(--ok); }
+  [hidden] { display:none !important; }
   /* card review */
   .tab.review-tab .count { background:var(--line); border-radius:8px; padding:0 6px; }
   .tab.review-tab.has .count { background:var(--accent); color:#fff; }
@@ -402,6 +409,11 @@ const project = () => state.projects.find(p => p.id === currentId) || state.proj
 
 // cards in review (t.review) are not on the board yet: their stageId is where they go once approved
 const inReview = t => !!t.review;
+// every project has one permanent Bugs major phase, whose rows are bug types rather than progress stages
+const isBugs = m => m?.kind === 'bugs';
+const phaseOfStage = (p, stageId) => p.majorPhases.find(m => m.stages.some(s => s.id === stageId));
+const hideResolvedKey = p => 'hideResolved:' + p.id;
+const hideResolved = p => store.get(hideResolvedKey(p)) === '1';
 const onBoard = t => !t.archived && !t.review;
 const orphansOf = p => {
   const ids = new Set(p.majorPhases.flatMap(m => m.stages.map(s => s.id)));
@@ -553,7 +565,7 @@ function openMoveMenu(p, t, x, y) {
   const menu = document.getElementById('menu');
   const here = id => id === t.stageId;
   menu.replaceChildren(h('div', { class: 'menu-title' }, 'Move to…'),
-    ...p.majorPhases.filter(m => m.stages.length).map(m => [h('div', { class: 'menu-group' }, m.name),
+    ...p.majorPhases.filter(m => m.stages.length).map(m => [h('div', { class: 'menu-group' }, (isBugs(m) ? '🐞 ' : '') + m.name),
       ...m.stages.map(s => h('button', { disabled: here(s.id), onclick: () => { closeMenu(); moveCardTo(p, t, s.id); } }, (here(s.id) ? '✓ ' : '') + s.name))]).flat(),
     h('div', { class: 'menu-group' }, ' '),
     h('button', { disabled: orphansOf(p).includes(t), onclick: () => { closeMenu(); moveCardTo(p, t, null); } }, 'Orphaned cards'));
@@ -609,8 +621,14 @@ function render() {
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
   if (archived) { board.replaceChildren(archivedPage(p)); return; }
   if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
-  board.replaceChildren(...mp.stages.map(st => stageEl(p, mp, st)),
-    h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: 'New stage' }); save(); render(); } }, '+ Add stage'));
+  const bugs = isBugs(mp);
+  board.replaceChildren(
+    ...(bugs ? [h('div', { class: 'bugs-bar' },
+      h('span', { class: 'hint', style: 'padding:0' }, 'Bugs are grouped by type. Anyone can add one, and it goes straight onto the board.'),
+      h('label', { class: 'check-inline' }, h('input', { type: 'checkbox', checked: hideResolved(p),
+        onchange: e => { store.set(hideResolvedKey(p), e.target.checked ? '1' : ''); render(); } }), 'Hide resolved'))] : []),
+    ...mp.stages.map(st => stageEl(p, mp, st)),
+    h('button', { class: 'newstage', onclick: () => { mp.stages.push({ id: uid(), name: bugs ? 'New type' : 'New stage' }); save(); render(); } }, bugs ? '+ Add type' : '+ Add stage'));
 }
 
 function renderFilters(p, el) {
@@ -638,15 +656,16 @@ function renderFilters(p, el) {
 }
 
 function tabEl(p, m, active) {
-  const n = p.tasks.filter(t => onBoard(t) && m.stages.some(s => s.id === t.stageId)).length, prog = phaseProgress(p, m);
-  const tab = h('div', { class: 'tab' + (active ? ' active' : '') + (m.stages.length ? ' phase-target' : ''), draggable: true, title: 'Drag to reorder',
+  const cards = p.tasks.filter(t => onBoard(t) && m.stages.some(s => s.id === t.stageId)), n = cards.length, prog = phaseProgress(p, m);
+  const bugs = isBugs(m), open = cards.filter(t => !t.resolved).length;
+  const tab = h('div', { class: 'tab' + (active ? ' active' : '') + (m.stages.length ? ' phase-target' : '') + (bugs ? ' bugs-tab' : ''), draggable: true, title: 'Drag to reorder',
     onclick: () => { if (!active) { setView(m.id); render(); } },
     ondragstart: e => { if (drag) return; drag = { kind: 'tab', id: m.id }; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'move'; },
     ondragover: e => {
       if (!drag) return;
       if (drag.kind === 'tab' && drag.id !== m.id) { e.preventDefault(); markSide(tab, dropSide(e, tab, 'x')); }
-      // a card goes to this phase's first stage; a stage row moves to this phase
-      else if ((drag.kind === 'card' && m.stages.length) || (drag.kind === 'stage' && !m.stages.some(s => s.id === drag.id))) {
+      // a card goes to this phase's first stage; a stage row moves to this phase (bug types and stages don't mix)
+      else if ((drag.kind === 'card' && m.stages.length) || (drag.kind === 'stage' && !m.stages.some(s => s.id === drag.id) && isBugs(phaseOfStage(p, drag.id)) === bugs)) {
         e.preventDefault(); tab.classList.add('over');
         if (drag.kind === 'card') dragHint(`Drop to move to ${m.name} › ${m.stages[0].name}`);
       }
@@ -659,26 +678,28 @@ function tabEl(p, m, active) {
       if (d.kind === 'tab') { const x = p.majorPhases.find(x => x.id === d.id); if (x) reorder(p.majorPhases, x, m, dropSide(e, tab, 'x')); }
       else if (d.kind === 'card') { const t = p.tasks.find(x => x.id === d.id); if (!t || !m.stages.length) return; moveTask(p, t, m.stages[0].id, null); setView(m.id); }
       else if (d.kind === 'stage') {
-        const from = p.majorPhases.find(x => x.stages.some(s => s.id === d.id));
-        if (!from || from === m) return;
+        const from = phaseOfStage(p, d.id);
+        if (!from || from === m || isBugs(from) !== bugs) return;
         const st = from.stages.find(s => s.id === d.id);
         from.stages = from.stages.filter(s => s !== st); m.stages.push(st);
       }
       save(); render();
     } },
-    active
+    // the Bugs phase keeps its name and can't be deleted
+    active && !bugs
       ? h('input', { value: m.name, size: Math.max(6, m.name.length),
           // text in a draggable element can't be selected with the mouse, so pause dragging while editing
           onmousedown: () => { tab.draggable = false; }, onblur: () => { tab.draggable = true; },
           onchange: e => { m.name = e.target.value.trim() || m.name; save(); render(); } })
-      : h('span', { class: 'name' }, m.name),
-    h('span', { class: 'count' }, n),
-    prog.all ? h('span', { class: 'tab-progress', title: `${prog.done} of ${prog.all} cards done` },
+      : h('span', { class: 'name' }, bugs ? '🐞 ' + m.name : m.name),
+    // bugs: open/total rather than % done, since types aren't progress stages
+    bugs ? h('span', { class: 'count', title: `${open} open of ${n}` }, n ? `${open}/${n}` : '0') : h('span', { class: 'count' }, n),
+    !bugs && prog.all ? h('span', { class: 'tab-progress', title: `${prog.done} of ${prog.all} cards done` },
       h('span', { class: 'bar' }, h('i', { style: `width:${prog.pct}%` })), `${prog.pct}%`) : null,
     active ? [
       h('button', { class: 'link', title: 'Move left', onclick: () => moveIn(p.majorPhases, m, -1) }, '‹'),
       h('button', { class: 'link', title: 'Move right', onclick: () => moveIn(p.majorPhases, m, 1) }, '›'),
-      h('button', { class: 'link', title: 'Delete major phase', onclick: () => delMajor(m) }, '✕')] : null);
+      bugs ? null : h('button', { class: 'link', title: 'Delete major phase', onclick: () => delMajor(m) }, '✕')] : null);
   return tab;
 }
 
@@ -732,23 +753,24 @@ function cardsRow(p, tasks, stageId, onStageDrop, ...head) {
 const countText = (shown, all) => (shown === all ? `${all}` : `${shown}/${all}`) + (all === 1 ? ' card' : ' cards');
 
 function stageEl(p, mp, st) {
-  const all = p.tasks.filter(t => t.stageId === st.id && onBoard(t)), shown = visible(p, all);
+  const bugs = isBugs(mp);
+  const all = p.tasks.filter(t => t.stageId === st.id && onBoard(t)), shown = visible(p, all).filter(t => !(bugs && hideResolved(p) && t.resolved));
   let row;
-  const grip = h('span', { class: 'grip', draggable: true, title: 'Drag to reorder, or onto another tab to move it there',
+  const grip = h('span', { class: 'grip', draggable: true, title: bugs ? 'Drag to reorder' : 'Drag to reorder, or onto another tab to move it there',
     ondragstart: e => { drag = { kind: 'stage', id: st.id }; e.dataTransfer.setData('text/plain', st.name); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDragImage(row, 20, 20); } }, '⠿');
   row = cardsRow(p, shown, st.id,
     (id, side) => { const x = mp.stages.find(s => s.id === id); if (x) { reorder(mp.stages, x, st, side); save(); render(); } },
     h('div', { class: 'name-row' }, grip,
-      h('input', { value: st.name, onchange: e => { st.name = e.target.value.trim() || st.name; save(); } })),
+      h('input', { value: st.name, placeholder: bugs ? 'Type' : 'Stage', title: bugs ? 'Bug type' : 'Stage', onchange: e => { st.name = e.target.value.trim() || st.name; save(); } })),
     h('div', { class: 'tools' },
       h('span', { class: 'count' }, countText(shown.length, all.length)),
       h('button', { class: 'link', title: 'Move up', onclick: () => moveIn(mp.stages, st, -1) }, '↑'),
       h('button', { class: 'link', title: 'Move down', onclick: () => moveIn(mp.stages, st, 1) }, '↓'),
-      h('button', { class: 'link', title: 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
-    h('label', { class: 'done-toggle', title: 'Cards here count as done towards this major phase’s progress' },
+      h('button', { class: 'link', title: bugs ? 'Delete type' : 'Delete stage', onclick: () => delStage(mp, st) }, '✕')),
+    bugs ? null : h('label', { class: 'done-toggle', title: 'Cards here count as done towards this major phase’s progress' },
       h('input', { type: 'checkbox', checked: !!st.done, onchange: e => { if (e.target.checked) st.done = true; else delete st.done; save(); render(); } }), 'Done stage'),
-    h('button', { class: 'add', onclick: () => addTask(st) }, '+ Add task'),
-    st.done && shown.length ? h('button', { class: 'add', title: 'Archive the cards showing in this stage', onclick: () => { shown.forEach(t => setArchived(t, true)); save(); render(); } }, `Archive all (${shown.length})`) : null);
+    h('button', { class: 'add', onclick: () => addTask(st) }, bugs ? '+ Add bug' : '+ Add task'),
+    !bugs && st.done && shown.length ? h('button', { class: 'add', title: 'Archive the cards showing in this stage', onclick: () => { shown.forEach(t => setArchived(t, true)); save(); render(); } }, `Archive all (${shown.length})`) : null);
   row.classList.toggle('done-stage', !!st.done);
   return row;
 }
@@ -775,7 +797,7 @@ function cardEl(p, t) {
   const cat = categoryOf(p, t), tags = t.tags.map(id => p.tags.find(x => x.id === id)).filter(Boolean);
   const done = t.steps.filter(x => x.done).length;
   const fixed = t.archived || t.review;  // not on the board, so not draggable or movable from the card
-  return h('div', { class: 'card', draggable: !fixed, 'data-id': t.id, style: '--cat:' + cat.color,
+  return h('div', { class: 'card' + (t.resolved ? ' resolved' : ''), draggable: !fixed, 'data-id': t.id, style: '--cat:' + cat.color,
     ondragstart: e => {
       drag = { kind: 'card', id: t.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; e.currentTarget.classList.add('dragging');
       document.body.classList.add('dragging-card'); dragHint(DRAG_HINT);
@@ -789,6 +811,7 @@ function cardEl(p, t) {
     tags.length ? h('div', { class: 'chips' }, tags.map(tag => tagChip(tag))) : null,
     personById(t.assigneeId) ? h('div', { class: 'assignee' }, avatar(personById(t.assigneeId)), h('span', {}, personById(t.assigneeId).name)) : null,
     h('div', { class: 'meta' },
+      t.resolved ? h('span', { class: 'badge resolved-badge', title: 'Resolved' }, '✓ Resolved') : null,
       h('span', { class: 'badge prio ' + t.priority, title: 'Priority' }, 'P: ' + cap(t.priority)),
       t.size ? h('span', { class: 'badge', title: 'Size' }, 'S: ' + cap(t.size)) : null,
       t.attachments.length ? h('span', { title: 'Attachments' }, '📎 ' + t.attachments.length) : null,
@@ -817,8 +840,11 @@ function moveIn(a, x, d) {
   [a[i], a[j]] = [a[j], a[i]]; save(); render();
 }
 function addMajor() {
-  const m = { id: uid(), name: 'New phase', stages: defaultStages() };
-  project().majorPhases.push(m); setView(m.id); save(); render();
+  const m = { id: uid(), name: 'New phase', stages: defaultStages() }, phases = project().majorPhases;
+  // new phases go before Bugs while it sits last
+  const last = phases[phases.length - 1];
+  phases.splice(isBugs(last) ? phases.length - 1 : phases.length, 0, m);
+  setView(m.id); save(); render();
 }
 // stage/major phase deletion: cards are orphaned unless "Delete cards" is ticked (they then go to the bin with it)
 // (cards in review keep pointing at a deleted stage; whoever approves them picks a new destination)
@@ -831,17 +857,19 @@ function delMajor(m) {
 }
 function delStage(mp, st) {
   const p = project(), cards = p.tasks.filter(t => !t.review && t.stageId === st.id);
-  confirmDelete(`stage "${st.name}"`, `${cards.length} card(s)`, cards.length, delCards => {
+  confirmDelete(`${isBugs(mp) ? 'bug type' : 'stage'} "${st.name}"`, `${cards.length} card(s)`, cards.length, delCards => {
     if (delCards) p.tasks = p.tasks.filter(t => !cards.includes(t)); else orphan(p, cards);
     mp.stages = mp.stages.filter(x => x !== st);
   });
 }
 function addTask(st) {
-  const p = project();
-  const t = { id: uid(), title: 'New task', description: '', stageId: st.id, categoryId: Model.defaultCategory(p).id,
+  const p = project(), bug = isBugs(phaseOfStage(p, st.id));
+  // bugs start as Bugfix when that category exists
+  const category = (bug && p.categories.find(c => c.name.trim().toLowerCase() === 'bugfix')) || Model.defaultCategory(p);
+  const t = { id: uid(), title: bug ? 'New bug' : 'New task', description: '', stageId: st.id, categoryId: category.id,
     priority: 'medium', tags: [], steps: [], attachments: [], comments: [] };
-  // someone who isn't a reviewer creates cards in review, aimed at this stage
-  const who = me(), review = reviewMode() && !isReviewer(who);
+  // someone who isn't a reviewer creates cards in review, aimed at this stage; bugs skip review
+  const who = me(), review = !bug && reviewMode() && !isReviewer(who);
   if (review) t.review = { status: 'pending', by: who?.id || '', byName: who?.name || 'Someone', at: new Date().toISOString() };
   p.tasks.push(t); save(); render(); openTask(t);
   if (review) toast('Card sent for review. It will appear here once a reviewer approves it.');
@@ -1132,17 +1160,22 @@ function openTask(t) {
   const phaseOf = () => p.majorPhases.find(m => m.stages.some(s => s.id === t.stageId));
   const phaseSel = h('select', { onchange: e => {
       const m = p.majorPhases.find(x => x.id === e.target.value);
-      moveCardTo(p, t, m ? m.stages[0].id : null); drawPlace(); } });
+      moveCardTo(p, t, m ? m.stages[0].id : null); drawPlace(); showReview(); } });
   const stageSel = h('select', { onchange: e => { moveCardTo(p, t, e.target.value); drawPlace(); } });
+  // bugs can be marked resolved (their types aren't progress stages)
+  const resolved = h('input', { type: 'checkbox', onchange: e => { if (e.target.checked) t.resolved = true; else delete t.resolved; save(); } });
+  const resolvedField = h('div', { style: 'flex:0 0 auto' }, h('label', {}, 'Bug'), h('label', { class: 'check' }, resolved, 'Resolved'));
   const drawPlace = () => {
     const here = phaseOf();
     if (document.activeElement !== phaseSel) phaseSel.replaceChildren(
-      ...p.majorPhases.map(m => h('option', { value: m.id, selected: m === here, disabled: !m.stages.length }, m.name + (m.stages.length ? '' : ' (no stages)'))),
+      ...p.majorPhases.map(m => h('option', { value: m.id, selected: m === here, disabled: !m.stages.length }, (isBugs(m) ? '🐞 ' : '') + m.name + (m.stages.length ? '' : ' (no stages)'))),
       h('option', { value: '', selected: !here }, '— Orphaned cards —'));
     if (document.activeElement !== stageSel) stageSel.replaceChildren(...(here
       ? here.stages.map(s => h('option', { value: s.id, selected: s.id === t.stageId }, s.name))
       : [h('option', { value: '' }, '—')]));
     stageSel.disabled = !here;
+    resolved.checked = !!t.resolved;
+    resolvedField.hidden = !isBugs(here);
   };
   const catDot = h('span', { class: 'dot', style: 'width:12px;height:12px' });
   const catOptions = () => p.categories.map(c => h('option', { value: c.id, selected: c.id === categoryOf(p, t).id }, c.name));
@@ -1213,8 +1246,9 @@ function openTask(t) {
   const locked = () => !!t.review && !canReview() && !ownsReview(t);
   const showReview = () => {
     const r = t.review;
+    const row = isBugs(phaseOf()) ? 'type' : 'stage';
     phaseLabel.textContent = r ? 'Destination: major phase' : 'Major phase';
-    stageLabel.textContent = r ? 'Destination: stage' : 'Stage';
+    stageLabel.textContent = r ? `Destination: ${row}` : cap(row);
     archiveBtn.hidden = !!r;
     reviewBar.hidden = !r;
     if (!r) return;
@@ -1246,7 +1280,8 @@ function openTask(t) {
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Priority'), prio),
       h('div', {}, h('label', {}, 'Size'), size),
-      h('div', {}, h('label', {}, 'Assignee'), h('div', { class: 'person-pick' }, assigneeAvatar, assignee))),
+      h('div', {}, h('label', {}, 'Assignee'), h('div', { class: 'person-pick' }, assigneeAvatar, assignee)),
+      resolvedField),
     from,
     h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Tags'), tagCount), tagBox, tagList),
     h('div', {}, h('div', { class: 'field-head' }, h('label', {}, 'Description'), desc.modeBtn), desc.area, desc.preview),

@@ -13,6 +13,7 @@
     { name: 'Other', color: '#8b8d98' },
   ];
   const DECISION_STATUSES = ['proposed', 'accepted', 'rejected', 'superseded'];
+  const BUG_TYPES = ['Crash', 'Gameplay', 'UI / Visual', 'Performance', 'Other'];
   const TAG_COLORS =['#3e7bfa', '#30a46c', '#e5484d', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#6e7781'];
 
   const newCategories = uid => DEFAULT_CATEGORIES.map(c => ({ id: uid(), ...c }));
@@ -37,6 +38,15 @@
     fix(!Array.isArray(p.tasks), () => { p.tasks = []; });
     fix(!Array.isArray(p.tags), () => { p.tags = []; });
     fix(!Array.isArray(p.categories) || !p.categories.length, () => { p.categories = newCategories(uid); });
+    // exactly one Bugs major phase, always called Bugs, placed last when it's first added; its rows are bug types
+    if (Array.isArray(p.majorPhases)) {
+      const bugs = p.majorPhases.filter(m => m.kind === 'bugs');
+      fix(!bugs.length, () => { p.majorPhases.push({ id: uid(), name: 'Bugs', kind: 'bugs', stages: BUG_TYPES.map(name => ({ id: uid(), name })) }); });
+      for (const extra of bugs.slice(1)) fix(true, () => { delete extra.kind; });
+      const b = p.majorPhases.find(m => m.kind === 'bugs');
+      fix(b.name !== 'Bugs', () => { b.name = 'Bugs'; });
+      for (const st of b.stages) fix('done' in st, () => { delete st.done; });
+    }
     // exactly one default category: a missing or deleted one falls back as defaultCategory() does
     fix(!p.categories.some(c => c.id === p.defaultCategoryId), () => { p.defaultCategoryId = defaultCategory(p).id; });
     const tagIds = new Set(p.tags.map(t => t.id)), catIds = new Set(p.categories.map(c => c.id));
@@ -49,6 +59,7 @@
       fix(!Array.isArray(t.attachments), () => { t.attachments = []; });
       fix(!Array.isArray(t.steps), () => { t.steps = []; });
       fix(!Array.isArray(t.comments), () => { t.comments = []; });
+      fix('resolved' in t && t.resolved !== true, () => { delete t.resolved; });
       // a card in review: { status: pending | declined, by, byName, at, reason? }. Anything else malformed stays in review.
       if ('review' in t) {
         fix(t.review === null || typeof t.review !== 'object', () => { t.review = { status: 'pending', by: '', byName: 'Someone', at: '' }; });

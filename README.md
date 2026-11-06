@@ -11,6 +11,14 @@ A small self-hosted phase board, organised as **Project → Major Phases → Sta
 
 Tick **Done stage** on any stage (one or more per major phase; stages named "Done" start ticked). Each major phase tab shows its progress: cards in done stages, plus archived cards, as a share of all its cards. Archive a card from its dialog, or everything showing in a done stage with **Archive all**. Archived cards leave the board and appear under the **Archived** tab, where opening one lets you unarchive it back to its stage.
 
+### Bugs
+
+Every project has a permanent **🐞 Bugs** major phase. It can't be deleted or renamed, but it can be reordered like any tab, and new major phases are added before it.
+
+- Its rows are **bug types** instead of stages: Crash, Gameplay, UI / Visual, Performance and Other to start with. Add, rename, reorder and delete types like stages.
+- **Anyone can add a bug, and it skips review**, going straight onto the board. New bugs start in the Bugfix category when it exists. Existing cards can be moved into Bugs by anyone; a bug moved out of Bugs onto the regular board by someone who isn't a reviewer goes into review, like any new card.
+- Mark a bug **Resolved** in its dialog: it shows a ✓ badge and is dimmed. **Hide resolved** above the types hides them for you only. The tab shows open/total bugs instead of a % done. Archiving works as elsewhere.
+
 ### Card review
 
 People marked **Reviewer** under **People** approve cards that others create. Skye is a reviewer from the start (added to People if missing), and only a reviewer can change who reviews.
