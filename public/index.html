@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phase Board</title>
 <style>
-  :root { --bg:#f4f5f7; --panel:#ebecf0; --card:#fff; --text:#172b4d; --muted:#6b778c; --accent:#0c66e4; --ok:#1f845a; --line:#dfe1e6; --danger:#c9372c; }
+  :root { --bg:#f4f5f7; --panel:#ebecf0; --card:#fff; --text:#172b4d; --muted:#6b778c; --accent:#0c66e4; --ok:#1f845a; --line:#dfe1e6; --danger:#c9372c; --warn:#a35c00; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#1d2125; --panel:#161a1d; --card:#22272b; --text:#c7d1db; --muted:#8c9bab; --accent:#579dff; --ok:#4bce97; --line:#38414a; --danger:#f87168; }
+    :root { --bg:#1d2125; --panel:#161a1d; --card:#22272b; --text:#c7d1db; --muted:#8c9bab; --accent:#579dff; --ok:#4bce97; --line:#38414a; --danger:#f87168; --warn:#f5a524; }
   }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
@@ -72,6 +72,43 @@
   button.chip.status { --c:var(--s); }
   .banner { background:color-mix(in srgb, #8b8d98 18%, transparent); border:1px solid #8b8d98; border-radius:4px; padding:6px 10px; }
   .banner[hidden] { display:none; }
+  /* deadlines and calendar */
+  .badge.due.soon { color:var(--warn); border-color:var(--warn); background:color-mix(in srgb, var(--warn) 14%, transparent); font-weight:600; }
+  .badge.due.overdue { background:var(--danger); border-color:var(--danger); color:#fff; font-weight:600; }
+  .due-pick { display:flex; align-items:center; gap:2px; }
+  .tab.cal-tab .count { border-radius:8px; padding:0 6px; }
+  .tab.cal-tab.has .count { background:var(--danger); color:#fff; }
+  .calendar { display:flex; flex-direction:column; gap:10px; max-width:1400px; }
+  .cal-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .cal-toolbar .month { font-weight:600; font-size:15px; min-width:150px; }
+  .seg { display:inline-flex; }
+  .seg button { border-radius:0; }
+  .seg button:first-child { border-radius:4px 0 0 4px; }
+  .seg button:last-child { border-radius:0 4px 4px 0; margin-left:-1px; }
+  .seg button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .cal-scroll { overflow-x:auto; }
+  .cal-grid { display:grid; grid-template-columns:repeat(7, minmax(100px, 1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:6px; overflow:hidden; min-width:720px; }
+  .cal-head { background:var(--panel); padding:4px 8px; font-size:12px; color:var(--muted); font-weight:600; }
+  .cal-day { background:var(--card); min-height:100px; padding:4px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .cal-day.other { background:var(--bg); }
+  .cal-day.other .num { opacity:.5; }
+  .cal-day.over { outline:2px dashed var(--accent); outline-offset:-2px; }
+  .cal-day .num { align-self:flex-start; font-size:12px; font-weight:600; line-height:20px; padding:0 4px; }
+  .cal-day.today .num { background:var(--accent); color:#fff; border-radius:10px; padding:0 7px; }
+  .cal-chip { font-size:12px; line-height:19px; padding:0 6px; border-radius:3px; border-left:3px solid var(--c); background:color-mix(in srgb, var(--c) 16%, transparent);
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:grab; }
+  .cal-chip:hover { outline:1px solid var(--accent); }
+  .cal-chip.dragging { opacity:.4; }
+  .cal-chip.overdue { color:var(--danger); font-weight:600; }
+  .cal-chip.finished { opacity:.55; text-decoration:line-through; }
+  .cal-day button.link { align-self:flex-start; font-size:11px; padding:0 4px; }
+  .agenda { display:flex; flex-direction:column; gap:4px; }
+  .agenda h3 { font-size:13px; margin:10px 0 2px; }
+  .agenda h3.overdue { color:var(--danger); }
+  .agenda-row { display:flex; gap:6px 14px; align-items:center; flex-wrap:wrap; background:var(--card); border:1px solid var(--line); border-left:4px solid var(--cat, var(--line)); border-radius:4px; padding:6px 10px; cursor:pointer; }
+  .agenda-row:hover { border-color:var(--accent); border-left-color:var(--cat); }
+  .agenda-row.finished { opacity:.6; }
+  .agenda-main { flex:1 1 240px; min-width:0; overflow-wrap:anywhere; }
   #status.live { color:var(--ok); }
   #status.offline { color:var(--muted); }
   /* major phase tabs */
@@ -237,7 +274,7 @@
 // Data shape: { people: [{ id, name }], projects: [project] } (people are shared by every project)
 // project { majorPhases: [{ id, name, stages: [{ id, name }] }],
 //           categories: [{ id, name, color }], tags: [{ id, name, color }],
-//           tasks: [{ id, stageId, categoryId, tags: [tagId], priority, size?, assigneeId?, description,
+//           tasks: [{ id, stageId, categoryId, tags: [tagId], priority, size?, due? ("YYYY-MM-DD"), assigneeId?, description,
 //                     steps: [{ id, name, done, assigneeId? }], attachments: [{ id, name, size, type }], orphanedFrom? }] }
 // A task whose stageId matches no stage (null after a delete) is an orphan. The server enforces the rules in model.js.
 // ids are generated by every client, so make collisions between users vanishingly unlikely
@@ -327,6 +364,7 @@ function describeChange(forward) {
   if (removed && names[last(removed)]) return `${names[last(removed)]} deleted`;
   if (added && names[last(added)]) return `${names[last(added)]} added`;
   if (forward.some(o => o.key === 'archived')) return 'Card archived';
+  if (forward.some(o => o.key === 'due')) return forward.some(o => o.key === 'due' && 'value' in o) ? 'Due date set' : 'Due date cleared';
   if (forward.some(o => o.key === 'stageId' || o.op === 'order')) return 'Moved';
   return 'Change saved';
 }
@@ -433,7 +471,8 @@ const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
 // selected view per project: a major phase id, or ORPHANS/ARCHIVED for those pages
-const ORPHANS = 'orphans', ARCHIVED = 'archived', DECISIONS = 'decisions', REVIEW = 'review';
+const ORPHANS = 'orphans', ARCHIVED = 'archived', DECISIONS = 'decisions', REVIEW = 'review', CALENDAR = 'calendar';
+const showingCalendar = () => store.get(viewKey(project())) === CALENDAR;
 const showingDecisions = () => store.get(viewKey(project())) === DECISIONS;
 const showingReview = () => store.get(viewKey(project())) === REVIEW;
 const viewKey = p => 'currentMajor:' + p.id;
@@ -443,7 +482,7 @@ const currentMajor = () => {
   const p = project(), id = store.get(viewKey(p));
   return p.majorPhases.find(m => m.id === id) || p.majorPhases[0];
 };
-const setView = id => store.set(viewKey(project()), id);
+const setView = (id, p = project()) => store.set(viewKey(p), id);
 
 // Board filters, per viewer and project, in three groups: category, tag and person. Within a group, a card matching
 // ANY selected chip shows; when several groups have selections a card must match each of them (e.g. category AND
@@ -551,12 +590,14 @@ const DRAG_HINT = 'Drop in a stage, or on a Major Phase tab to move the card the
 
 // move a card to a stage, in any major phase (stageId null: Orphaned cards); the board follows it.
 // For a card in review this only changes where it will go once approved.
+// (The calendar stays put: the card keeps its place there.)
 function moveCardTo(p, t, stageId) {
   if (t.review) { t.stageId = stageId; save(); render(); return; }
+  const follow = !showingCalendar();
   if (stageId) {
     moveTask(p, t, stageId, null);
-    setView(p.majorPhases.find(m => m.stages.some(s => s.id === stageId)).id);
-  } else { orphan(p, [t], null); setView(ORPHANS); }
+    if (follow) setView(p.majorPhases.find(m => m.stages.some(s => s.id === stageId)).id, p);
+  } else { orphan(p, [t], null); if (follow) setView(ORPHANS, p); }
   save(); render();
 }
 
@@ -598,8 +639,9 @@ function render() {
   const tabs = document.getElementById('tabs'), filters = document.getElementById('filters'), board = document.getElementById('board');
   const p = project();
   if (!p) { tabs.replaceChildren(); filters.replaceChildren(); board.replaceChildren(h('p', {}, 'No projects. Create one with "+ Project".')); return; }
-  const orphans = showingOrphans(), archived = showingArchived(), decisions = showingDecisions(), review = showingReview();
-  const mp = orphans || archived || decisions || review ? null : currentMajor();
+  const orphans = showingOrphans(), archived = showingArchived(), decisions = showingDecisions(), review = showingReview(), calendar = showingCalendar();
+  const mp = orphans || archived || decisions || review || calendar ? null : currentMajor();
+  const overdue = p.tasks.filter(t => onBoard(t) && dueState(p, t) === 'overdue').length;
   const pending = p.tasks.filter(t => t.review?.status === 'pending').length;
 
   tabs.replaceChildren(...p.majorPhases.map(m => tabEl(p, m, m === mp)),
@@ -612,12 +654,17 @@ function render() {
     // cards waiting for review; the badge stands out for reviewers when any are waiting
     h('div', { class: 'tab review-tab' + (review ? ' active' : '') + (pending && isReviewer(me()) ? ' has' : ''), title: 'Cards waiting for review',
         onclick: () => { if (!review) { setView(REVIEW); render(); } } },
-      h('span', { class: 'name' }, 'Review'), h('span', { class: 'count' }, pending)));
+      h('span', { class: 'name' }, 'Review'), h('span', { class: 'count' }, pending)),
+    // due dates; the count is overdue cards, shown only when there are some
+    h('div', { class: 'tab cal-tab' + (calendar ? ' active' : '') + (overdue ? ' has' : ''), title: overdue ? `Calendar of due dates (${overdue} overdue)` : 'Calendar of due dates',
+        onclick: () => { if (!calendar) { setView(CALENDAR); render(); } } },
+      h('span', { class: 'name' }, 'Calendar'), overdue ? h('span', { class: 'count' }, overdue) : null));
   // the card filters don't apply to the decisions log, which has its own
   if (decisions) { filters.replaceChildren(); board.replaceChildren(decisionsPage(p)); return; }
   if (review) { filters.replaceChildren(); board.replaceChildren(reviewPage(p)); return; }
   renderFilters(p, filters);
 
+  if (calendar) { board.replaceChildren(calendarPage(p)); return; }
   if (orphans) { board.replaceChildren(orphanPage(p)); return; }
   if (archived) { board.replaceChildren(archivedPage(p)); return; }
   if (!mp) { board.replaceChildren(h('p', {}, 'No major phases. Add one with "+ Major phase".')); return; }
@@ -813,6 +860,7 @@ function cardEl(p, t) {
     h('div', { class: 'meta' },
       t.resolved ? h('span', { class: 'badge resolved-badge', title: 'Resolved' }, '✓ Resolved') : null,
       h('span', { class: 'badge prio ' + t.priority, title: 'Priority' }, 'P: ' + cap(t.priority)),
+      dueBadge(p, t),
       t.size ? h('span', { class: 'badge', title: 'Size' }, 'S: ' + cap(t.size)) : null,
       t.attachments.length ? h('span', { title: 'Attachments' }, '📎 ' + t.attachments.length) : null,
       t.comments.length ? h('span', { title: 'Comments' }, '💬 ' + t.comments.length) : null,
@@ -1131,8 +1179,8 @@ function stepText({ class: cls = '', onkeydown, ...props }) {
     } });
 }
 
-function openTask(t) {
-  const p = project();
+// p: the card's project, when it isn't the one showing (the calendar can show every project)
+function openTask(t, p = project()) {
   const alive = () => state.projects.includes(p) && p.tasks.includes(t);
 
   // steps
@@ -1185,6 +1233,10 @@ function openTask(t) {
     Model.PRIORITIES.map(v => h('option', { value: v, selected: v === t.priority }, cap(v))));
   const size = h('select', { onchange: e => { if (e.target.value) t.size = e.target.value; else delete t.size; save(); } },
     h('option', { value: '' }, '—'), Model.SIZES.map(v => h('option', { value: v, selected: v === t.size }, cap(v))));
+  // deadline: a date only; the date input reads and writes "YYYY-MM-DD", so no timezone is involved
+  const due = h('input', { type: 'date', value: t.due || '', onchange: e => { setDue(t, e.target.value); save(); showDue(); } });
+  const clearDue = h('button', { class: 'link', title: 'Clear due date', onclick: () => { setDue(t, ''); save(); showDue(); } }, '✕');
+  const showDue = () => { if (document.activeElement !== due) due.value = t.due || ''; clearDue.hidden = !t.due; };
   const assigneeAvatar = h('span', { style: 'display:flex' });
   const showAssignee = () => { const x = personById(t.assigneeId); assigneeAvatar.replaceChildren(...(x ? [avatar(x)] : [])); };
   const assignee = personSelect(() => t.assigneeId, id => { assign(t, id); showAssignee(); });
@@ -1228,7 +1280,7 @@ function openTask(t) {
   const drawDecisions = () => {
     const linked = decisionsFor(p, t);
     decisionsBox.replaceChildren(...linked.map(d => h('div', { class: 'item decision-link' },
-      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => openDecision(d) }, decisionLabel(d)), statusChip(d),
+      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => openDecision(d, p) }, decisionLabel(d)), statusChip(d),
       h('button', { class: 'link', title: 'Unlink', onclick: () => { d.cardIds = d.cardIds.filter(id => id !== t.id); save(); drawDecisions(); } }, '✕'))));
     const others = sortedDecisions(p).filter(d => !linked.includes(d));
     linkDecision.replaceChildren(h('option', { value: '' }, others.length ? '+ Link a decision…' : 'No other decisions to link'),
@@ -1269,7 +1321,7 @@ function openTask(t) {
     desc.preview.style.pointerEvents = on ? 'none' : '';
   };
 
-  drawSteps(); drawTags(); drawPlace(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions(); showReview();
+  drawSteps(); drawTags(); drawPlace(); showFrom(); showCat(); showAssignee(); showArchive(); drawDecisions(); showReview(); showDue();
   showDialog(
     reviewBar,
     title,
@@ -1280,6 +1332,7 @@ function openTask(t) {
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Priority'), prio),
       h('div', {}, h('label', {}, 'Size'), size),
+      h('div', {}, h('label', {}, 'Due date'), h('div', { class: 'due-pick' }, due, clearDue)),
       h('div', {}, h('label', {}, 'Assignee'), h('div', { class: 'person-pick' }, assigneeAvatar, assignee)),
       resolvedField),
     from,
@@ -1313,7 +1366,7 @@ function openTask(t) {
     if (!stepsBox.contains(a)) drawSteps();
     if (a !== linkDecision) drawDecisions();
     assignee.refresh(); comments.refresh(); desc.refresh(); files.refresh();
-    showFrom(); showCat(); showAssignee(); showArchive(); showReview(); applyLock();
+    showFrom(); showCat(); showAssignee(); showArchive(); showReview(); showDue(); applyLock();
   };
 }
 
@@ -1323,7 +1376,9 @@ function openTask(t) {
 // authorName, body }], comments, attachments }]
 const DECISION_STATUSES = ['proposed', 'accepted', 'rejected', 'superseded'];
 const DECISION_TEMPLATE = '## Context\n\n\n## Options considered\n\n\n## Decision\n\n\n## Rationale\n\n\n## Consequences / follow-ups\n\n';
-const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// a local date as "YYYY-MM-DD"
+const toDateStr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => toDateStr(new Date());
 const fmtDate = s => s ? new Date(s + 'T00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'no date';
 const decisionLabel = d => `${d.title || 'Untitled decision'} (${fmtDate(d.date)})`;
 const statusChip = d => h('span', { class: 'badge status ' + d.status }, cap(d.status));
@@ -1371,8 +1426,7 @@ function decisionsPage(p) {
     list);
 }
 
-function openDecision(d) {
-  const p = project();
+function openDecision(d, p = project()) {
   const alive = () => state.projects.includes(p) && p.decisions.includes(d);
   const title = h('input', { value: d.title, placeholder: 'Decision title', style: 'font-size:18px;font-weight:600',
     oninput: e => { d.title = e.target.value; save(); } });
@@ -1386,12 +1440,12 @@ function openDecision(d) {
   const drawLinks = () => {
     const newer = p.decisions.filter(x => x.supersedes === d.id);
     banner.replaceChildren(...newer.map(x => h('div', {}, 'Superseded by ',
-      h('button', { class: 'link', onclick: () => openDecision(x) }, decisionLabel(x)))));
+      h('button', { class: 'link', onclick: () => openDecision(x, p) }, decisionLabel(x)))));
     banner.hidden = !newer.length;
     if (document.activeElement !== supersedes) supersedes.replaceChildren(h('option', { value: '' }, '— Nothing —'),
       ...sortedDecisions(p).filter(x => x !== d).map(x => h('option', { value: x.id, selected: x.id === d.supersedes }, decisionLabel(x))));
     const old = p.decisions.find(x => x.id === d.supersedes);
-    oldLink.replaceChildren(...(old ? [h('button', { class: 'link', onclick: () => openDecision(old) }, 'Open ' + decisionLabel(old))] : []));
+    oldLink.replaceChildren(...(old ? [h('button', { class: 'link', onclick: () => openDecision(old, p) }, 'Open ' + decisionLabel(old))] : []));
   };
   const oldLink = h('div', {});
 
@@ -1414,7 +1468,7 @@ function openDecision(d) {
     save(); historyBtn.textContent = `History (${d.history.length})`;
   };
   const body = markdownField({ get: () => d.body, set: v => { d.body = v; }, rows: 22, onEditEnd: keepVersion });
-  const historyBtn = h('button', { class: 'link', onclick: () => { body.finish(); openHistory(d, () => openDecision(d)); } }, `History (${d.history.length})`);
+  const historyBtn = h('button', { class: 'link', onclick: () => { body.finish(); openHistory(d, () => openDecision(d, p), p); } }, `History (${d.history.length})`);
 
   // linked cards
   const cardsBox = h('div', { class: 'list' });
@@ -1422,7 +1476,7 @@ function openDecision(d) {
   const drawCards = () => {
     const linked = d.cardIds.map(id => p.tasks.find(t => t.id === id)).filter(Boolean);
     cardsBox.replaceChildren(...linked.map(t => h('div', { class: 'item' },
-      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => { body.finish(); openTask(t); } }, t.title + (t.archived ? ' (archived)' : '')),
+      h('button', { class: 'link', style: 'flex:1;text-align:left', onclick: () => { body.finish(); openTask(t, p); } }, t.title + (t.archived ? ' (archived)' : '')),
       h('button', { class: 'link', title: 'Unlink', onclick: () => { d.cardIds = d.cardIds.filter(id => id !== t.id); save(); drawCards(); } }, '✕'))));
     if (document.activeElement === linkCard) return;
     const free = p.tasks.filter(t => !d.cardIds.includes(t.id));
@@ -1468,9 +1522,9 @@ function openDecision(d) {
 }
 
 // earlier versions of a decision's write-up, newest first; restoring keeps the current text as a version too
-function openHistory(d, back) {
+function openHistory(d, back, p = project()) {
   const draw = () => {
-    if (!project().decisions.includes(d)) return deletedNotice('decision', d.title);
+    if (!p.decisions.includes(d)) return deletedNotice('decision', d.title);
     showDialog(
       h('h2', {}, `History: ${decisionLabel(d)}`),
       h('p', { class: 'hint', style: 'padding:0' }, 'A version is kept each time someone finishes editing the write-up.'),
@@ -1498,6 +1552,143 @@ function openHistory(d, back) {
   };
   syncDialog = draw;
   draw();
+}
+
+// ---------- deadlines ----------
+// t.due is a calendar date, "YYYY-MM-DD", with no time of day: it is the same date wherever the viewer is, and is
+// compared with the viewer's own date today.
+const dateParts = s => s.split('-').map(Number);
+const addDays = (s, n) => { const [y, m, d] = dateParts(s); return toDateStr(new Date(y, m - 1, d + n)); };
+const daysUntil = s => { const [y, m, d] = dateParts(s), [Y, M, D] = dateParts(today()); return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(Y, M - 1, D)) / 86400e3); };
+const fmtDay = (s, opts) => { const [y, m, d] = dateParts(s); return new Date(y, m - 1, d).toLocaleDateString(undefined, { ...opts, ...(y !== new Date().getFullYear() ? { year: 'numeric' } : {}) }); };
+const setDue = (t, s) => { if (Model.validDate(s)) t.due = s; else delete t.due; };
+// finished cards are never overdue: in a done stage, resolved bugs and archived cards
+const finished = (p, t) => !!(t.archived || t.resolved || p.majorPhases.some(m => m.stages.some(s => s.id === t.stageId && s.done)));
+// '' | 'soon' (today or within 2 days) | 'overdue'
+const dueState = (p, t) => {
+  if (!t.due || finished(p, t)) return '';
+  const n = daysUntil(t.due);
+  return n < 0 ? 'overdue' : n <= 2 ? 'soon' : '';
+};
+const dueText = s => { const n = daysUntil(s); return n === 0 ? 'today' : n === 1 ? 'tomorrow' : n === -1 ? 'yesterday' : n < 0 ? `${-n} days ago` : `in ${n} days`; };
+const dueBadge = (p, t) => t.due ? h('span', { class: 'badge due ' + dueState(p, t),
+  title: `Due ${fmtDay(t.due, { weekday: 'long', month: 'long', day: 'numeric' })} (${dueText(t.due)})${dueState(p, t) === 'overdue' ? ': overdue' : ''}` }, 'Due ' + fmtDay(t.due, { month: 'short', day: 'numeric' })) : null;
+// "overdue" and "due soon" depend on today's date, so redraw when it changes
+let shownDay = today();
+setInterval(() => { if (today() !== shownDay) { shownDay = today(); if (state) renderSoon(); } }, 60e3);
+
+// ---------- calendar ----------
+// Cards by due date: a month grid (weeks start on Monday) or an agenda list. Cards in review and archived cards aren't
+// shown, nor finished ones unless "Show completed" is ticked. These choices, and whether to show every project, are
+// per viewer. The board filters apply; in other projects they match categories and tags of the same name.
+const CAL_PREFS = 'calendar';
+const calPrefs = () => {
+  let x = {};
+  try { x = JSON.parse(store.get(CAL_PREFS) || '{}') || {}; } catch {}
+  return { view: x.view === 'agenda' ? 'agenda' : 'month', all: x.all === true, done: x.done === true };
+};
+const setCalPrefs = patch => { store.set(CAL_PREFS, JSON.stringify({ ...calPrefs(), ...patch })); render(); };
+let calMonth = null;  // the month shown, as its first day "YYYY-MM-01"; starts at this month
+const calExpanded = new Set();  // days showing all their cards rather than "+N more"
+
+function calendarItems(p, prefs) {
+  const lower = s => s.trim().toLowerCase();
+  const names = (kind, list) => new Set(activeFilter(p, kind).map(id => lower(list.find(x => x.id === id).name)));
+  const cats = names('category', p.categories), tags = names('tag', p.tags), people = activeFilter(p, 'person');
+  const matches = (q, t) => (!cats.size || cats.has(lower(categoryOf(q, t).name))) &&
+    (!tags.size || t.tags.some(id => { const g = q.tags.find(x => x.id === id); return g && tags.has(lower(g.name)); })) &&
+    (!people.length || peopleOn(t).some(id => people.includes(id)));
+  return (prefs.all ? state.projects : [p]).flatMap(q => q.tasks
+    .filter(t => onBoard(t) && (prefs.done || !finished(q, t)) && matches(q, t))
+    .map(t => ({ p: q, t })))
+    // by due date, then title; no due date last
+    .sort((a, b) => { const x = a.t.due || '~', y = b.t.due || '~'; return x < y ? -1 : x > y ? 1 : (a.t.title || '').localeCompare(b.t.title || ''); });
+}
+const placeOf = (q, t) => destinationOf(q, t) || 'Orphaned cards';
+
+function calendarPage(p) {
+  const prefs = calPrefs(), items = calendarItems(p, prefs);
+  const seg = (v, label) => h('button', { class: prefs.view === v ? 'on' : '', 'aria-pressed': String(prefs.view === v), onclick: () => setCalPrefs({ view: v }) }, label);
+  const check = (key, label, title) => h('label', { class: 'check-inline', title }, h('input', { type: 'checkbox', checked: prefs[key], onchange: e => setCalPrefs({ [key]: e.target.checked }) }), label);
+  const month = calMonth || today().slice(0, 8) + '01';
+  const goMonth = n => { const [y, m] = dateParts(month); calMonth = toDateStr(new Date(y, m - 1 + n, 1)); render(); };
+  return h('div', { class: 'calendar' },
+    h('div', { class: 'cal-toolbar' },
+      h('span', { class: 'seg' }, seg('month', 'Month'), seg('agenda', 'Agenda')),
+      prefs.view === 'month' ? [
+        h('button', { title: 'Previous month', onclick: () => goMonth(-1) }, '‹'),
+        h('button', { onclick: () => { calMonth = null; render(); } }, 'Today'),
+        h('button', { title: 'Next month', onclick: () => goMonth(1) }, '›'),
+        h('span', { class: 'month' }, fmtDay(month, { month: 'long', year: 'numeric' }))] : null,
+      h('span', { style: 'flex:1' }),
+      check('all', 'All projects', 'Show cards from every project'),
+      check('done', 'Show completed', 'Also show cards in done stages and resolved bugs')),
+    prefs.view === 'month' ? monthView(month, items, prefs) : agendaView(items, prefs));
+}
+
+function monthView(month, items, prefs) {
+  const [y, m] = dateParts(month), lead = (new Date(y, m - 1, 1).getDay() + 6) % 7, days = new Date(y, m, 0).getDate();
+  const start = addDays(month, -lead), now = today(), byDay = new Map();
+  for (const x of items) if (x.t.due) byDay.set(x.t.due, [...(byDay.get(x.t.due) || []), x]);
+  const MAX = 3;
+  const chip = ({ p: q, t }) => {
+    const el = h('div', { class: 'cal-chip ' + dueState(q, t) + (finished(q, t) ? ' finished' : ''), draggable: true, style: '--c:' + categoryOf(q, t).color,
+      title: `${t.title}\n${prefs.all ? q.name + ' › ' : ''}${placeOf(q, t)}\nDrag to another day to change its due date`,
+      onclick: () => openTask(t, q),
+      ondragstart: e => { drag = { kind: 'due', id: t.id, projectId: q.id }; e.dataTransfer.setData('text/plain', t.title); e.dataTransfer.effectAllowed = 'move'; el.classList.add('dragging'); } },
+      t.title || 'Untitled');
+    return el;
+  };
+  const cell = ds => {
+    const all = byDay.get(ds) || [], open = calExpanded.has(ds) || all.length <= MAX + 1;
+    const el = h('div', { class: 'cal-day' + (ds.slice(0, 7) === month.slice(0, 7) ? '' : ' other') + (ds === now ? ' today' : ''),
+      ondragover: e => { if (drag?.kind === 'due') { e.preventDefault(); el.classList.add('over'); } },
+      ondragleave: e => { if (!el.contains(e.relatedTarget)) el.classList.remove('over'); },
+      ondrop: e => {
+        e.preventDefault();
+        const d = drag; endDrag();
+        const t = d?.kind === 'due' && state.projects.find(q => q.id === d.projectId)?.tasks.find(x => x.id === d.id);
+        if (t && t.due !== ds) { t.due = ds; save(); render(); }
+      } },
+      h('span', { class: 'num', title: fmtDay(ds, { weekday: 'long', month: 'long', day: 'numeric' }) }, Number(ds.slice(8))),
+      (open ? all : all.slice(0, MAX)).map(chip),
+      all.length > MAX + 1 ? h('button', { class: 'link', onclick: () => { calExpanded.has(ds) ? calExpanded.delete(ds) : calExpanded.add(ds); render(); } },
+        calExpanded.has(ds) ? 'Show less' : `+${all.length - MAX} more`) : null);
+    return el;
+  };
+  const weekdays = [...Array(7)].map((_, i) => new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'short' }));  // 1 Jan 2024 was a Monday
+  const undated = items.filter(x => !x.t.due).length;
+  return h('div', {},
+    h('div', { class: 'cal-scroll' }, h('div', { class: 'cal-grid' },
+      weekdays.map(w => h('div', { class: 'cal-head' }, w)),
+      [...Array(Math.ceil((lead + days) / 7) * 7)].map((_, i) => cell(addDays(start, i))))),
+    h('p', { class: 'hint', style: 'padding:6px 0 0' }, 'Click a card to open it, or drag it to another day to change its due date.' +
+      (undated ? ` ${undated} card${undated === 1 ? ' has' : 's have'} no due date (see Agenda).` : '')));
+}
+
+function agendaView(items, prefs) {
+  const now = today(), groups = new Map();
+  const heading = ({ p: q, t }) => !t.due ? 'No due date' : t.due < now && !finished(q, t) ? 'Overdue' : t.due === now ? 'Today' :
+    daysUntil(t.due) === 1 ? 'Tomorrow' : fmtDay(t.due, { weekday: 'long', month: 'long', day: 'numeric' });
+  for (const x of items) { const k = heading(x); groups.set(k, [...(groups.get(k) || []), x]); }
+  // overdue first; the rest are already in date order, with "No due date" last
+  const order = [...groups.keys()].sort((a, b) => (b === 'Overdue') - (a === 'Overdue'));
+  const row = ({ p: q, t }) => {
+    const cat = categoryOf(q, t), who = personById(t.assigneeId);
+    return h('div', { class: 'agenda-row' + (finished(q, t) ? ' finished' : ''), style: '--cat:' + cat.color, tabIndex: 0, role: 'button',
+        onclick: () => openTask(t, q), onkeydown: e => { if (e.key === 'Enter') openTask(t, q); } },
+      h('div', { class: 'agenda-main' }, h('strong', {}, t.title || 'Untitled'),
+        h('div', { class: 'count' }, (prefs.all ? q.name + ' › ' : '') + placeOf(q, t))),
+      h('span', { class: 'cat' }, h('span', { class: 'dot', style: '--c:' + cat.color }), cat.name),
+      who ? h('span', { class: 'assignee' }, avatar(who), h('span', {}, who.name)) : null,
+      h('span', { class: 'meta' },
+        t.resolved ? h('span', { class: 'badge resolved-badge' }, '✓ Resolved') : null,
+        h('span', { class: 'badge prio ' + t.priority, title: 'Priority' }, 'P: ' + cap(t.priority)),
+        dueBadge(q, t)));
+  };
+  return h('div', { class: 'agenda' },
+    items.length ? order.flatMap(k => [h('h3', { class: k === 'Overdue' ? 'overdue' : '' }, `${k} (${groups.get(k).length})`), h('div', { class: 'list' }, groups.get(k).map(row))])
+      : h('p', { class: 'count' }, 'No cards to show.'));
 }
 
 // ---------- recently deleted bin ----------
