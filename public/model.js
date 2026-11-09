@@ -16,6 +16,11 @@
   const BUG_TYPES = ['Crash', 'Gameplay', 'UI / Visual', 'Performance', 'Other'];
   const TAG_COLORS =['#3e7bfa', '#30a46c', '#e5484d', '#f5a524', '#8e4ec6', '#12a594', '#d6409f', '#6e7781'];
 
+  // a real calendar date written "YYYY-MM-DD" (checked in UTC, so it means the same day everywhere)
+  const validDate = s => {
+    const d = typeof s === 'string' && /^\d{4}-\d\d-\d\d$/.test(s) && new Date(s + 'T00:00:00Z');
+    return !!d && !isNaN(d) && d.toISOString().slice(0, 10) === s;
+  };
   const newCategories = uid => DEFAULT_CATEGORIES.map(c => ({ id: uid(), ...c }));
   // the category new cards get: the project's chosen one, else Feature Addition, else the first
   const defaultCategory = p => p.categories.find(c => c.id === p.defaultCategoryId) ||
@@ -60,6 +65,8 @@
       fix(!Array.isArray(t.steps), () => { t.steps = []; });
       fix(!Array.isArray(t.comments), () => { t.comments = []; });
       fix('resolved' in t && t.resolved !== true, () => { delete t.resolved; });
+      // a deadline is a calendar date with no time of day or timezone, "YYYY-MM-DD"
+      fix('due' in t && !validDate(t.due), () => { delete t.due; });
       // a card in review: { status: pending | declined, by, byName, at, reason? }. Anything else malformed stays in review.
       if ('review' in t) {
         fix(t.review === null || typeof t.review !== 'object', () => { t.review = { status: 'pending', by: '', byName: 'Someone', at: '' }; });
@@ -87,5 +94,5 @@
     return changed;
   }
 
-  Object.assign(exports, { DEFAULT_CATEGORIES, PRIORITIES, SIZES, MAX_TAGS, TAG_COLORS, newCategories, defaultCategory, normalizeState });
+  Object.assign(exports, { DEFAULT_CATEGORIES, PRIORITIES, SIZES, MAX_TAGS, TAG_COLORS, newCategories, defaultCategory, normalizeState, validDate });
 })(typeof module !== 'undefined' ? module.exports : (window.Model = {}));

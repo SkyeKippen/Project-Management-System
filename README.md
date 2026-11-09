@@ -39,6 +39,13 @@ Each project has a **Decisions** tab for recording decisions in detail. Decision
 - Comments and attachments work as they do on cards. Deleted decisions go to Recently deleted, and undo covers them.
 - The list is sorted by decision date, oldest first, then by title. Filter it by status, or search titles, summaries and write-ups. These choices are per viewer.
 
+### Due dates and calendar
+
+- Give a card a **Due date** in its dialog (a date only, no time of day; ✕ clears it). The card shows **Due Nov 12**: amber when it's due today or within 2 days, red once overdue. Cards in a done stage, resolved bugs and archived cards are never shown as overdue. A due date is the same date for everyone, whatever their timezone.
+- The **Calendar** tab shows cards by due date; its count is the number of overdue cards. **Month** shows weeks starting Monday, with ‹ › and Today to move between months. Click a card to open it, or drag it to another day to change its due date. Busy days show "+N more".
+- **Agenda** lists cards by due date, then title, under Overdue, Today, Tomorrow and each later date, with cards that have no due date at the bottom. Each shows its major phase › stage, category, assignee, priority and due date.
+- The category, tag and person filters apply. Cards in review and archived cards aren't shown; tick **Show completed** to include cards in done stages and resolved bugs. **All projects** shows every project's cards together (the filters then match other projects' categories and tags by name). These choices are per viewer.
+
 ### Recently deleted and undo
 
 Deleted cards, stages, major phases, decisions, projects and attachments go to **Recently deleted** for 30 days, along with any attachment files. **Restore** puts an item back where it was. If its parent has gone too, the parent is restored with it where possible; a card whose stage no longer exists returns to Orphaned cards. **Delete forever** removes it immediately, and anything older than 30 days is removed automatically.
